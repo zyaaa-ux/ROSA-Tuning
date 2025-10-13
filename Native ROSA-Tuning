@@ -1,0 +1,493 @@
+# -*- coding: utf-8 -*-
+
+import os
+import math
+import json
+import time
+import types
+import atexit
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+from datasets import load_from_disk
+from transformers import (
+    AutoConfig,
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
+    set_seed,
+)
+from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3ForCausalLM,
+    Qwen3DecoderLayer,
+)
+
+
+def _env_int(k, default):
+    try:
+        return int(os.environ.get(k, default))
+    except Exception:
+        return default
+
+LOCAL_WORLD_SIZE = _env_int("", max(1, torch.cuda.device_count()))
+LOCAL_RANK = _env_int("", 0)
+
+_PER_RANK_CPUS = max(1, (os.cpu_count() or 1) // max(1, LOCAL_WORLD_SIZE))
+
+torch.set_num_threads(_PER_RANK_CPUS)
+
+def _rosa_worker_init():
+    os.environ.setdefault("", "")
+    os.environ.setdefault("", "")
+    try:
+        import torch as _t
+        _t.set_num_threads(1)
+    except Exception:
+        pass
+
+
+MODEL_LOCAL_DIR = ""
+DATASET_DIR = ""
+OUTPUT_DIR = ""
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+USE_FLASH_ATTN = None
+BF16 = None
+CPU_CORES = None
+
+SEQ_LEN = None
+ATTN_WINDOW = None
+FIRST_GLOBAL_LAYERS = None
+
+ROSA_ALPHA = None
+TAU_INIT = None
+TAU_MIN = None
+ROSA_VOCAB_CAP_MIN = None
+ROSA_VOCAB_CAP_MAX = None
+ROSA_VOCAB_POW2 = None
+
+LR_ROSA = None
+LR_BACKBONE = None
+WEIGHT_DECAY = None
+WARMUP_STEPS = None
+NUM_EPOCHS = None
+PER_DEVICE_TRAIN_BSZ = None
+GRAD_ACCUM_STEPS = None
+LOGGING_STEPS = None
+EVAL_STEPS = None
+SEED = None
+
+SAVE_STATE_DICT_NAME = ""
+SAVE_AUX_JSON = ""
+
+GRADIENT_CHECKPOINTING = bool(LR_BACKBONE and LR_BACKBONE > 0.0)
+
+
+@dataclass
+class FixedLenLMCollator:
+    pad_token_id: int
+    seq_len: int
+
+    def __call__(self, features):
+        input_ids = [f["input_ids"][: self.seq_len] for f in features]
+        if "attention_mask" in features[0]:
+            attention_mask = [f["attention_mask"][: self.seq_len] for f in features]
+        else:
+            attention_mask = [[1] * len(x) for x in input_ids]
+
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        attention_mask = torch.tensor(attention_mask, dtype=torch.long)
+        if input_ids.shape[1] < self.seq_len:
+            pad_len = self.seq_len - input_ids.shape[1]
+            pad = torch.full((input_ids.size(0), pad_len), self.pad_token_id, dtype=torch.long)
+            input_ids = torch.cat([input_ids, pad], dim=1)
+            attention_mask = torch.cat([attention_mask, torch.zeros_like(pad)], dim=1)
+
+        if "labels" in features[0]:
+            labels = [f["labels"][: self.seq_len] for f in features]
+            labels = torch.tensor(labels, dtype=torch.long)
+            if labels.shape[1] < self.seq_len:
+                lab_pad = torch.full((labels.size(0), self.seq_len - labels.shape[1]), -100, dtype=torch.long)
+                labels = torch.cat([labels, lab_pad], dim=1)
+        else:
+            labels = input_ids.clone()
+            labels[labels == self.pad_token_id] = -100
+
+        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+
+
+class _SAM:
+    __slots__ = ("next", "link", "length", "last", "e")
+
+    def __init__(self):
+        self.next = [{}]
+        self.link = [-1]
+        self.length = [0]
+        self.last = 0
+        self.e = [-1]
+
+    def _new_state(self, length: int) -> int:
+        self.next.append({})
+        self.link.append(-1)
+        self.length.append(length)
+        self.e.append(-1)
+        return len(self.next) - 1
+
+    def extend(self, x: int, pos: int):
+        cur = self._new_state(self.length[self.last] + 1)
+        p = self.last
+        while p != -1 and x not in self.next[p]:
+            self.next[p][x] = cur
+            p = self.link[p]
+        if p == -1:
+            self.link[cur] = 0
+        else:
+            q = self.next[p][x]
+            if self.length[p] + 1 == self.length[q]:
+                self.link[cur] = q
+            else:
+                clone = self._new_state(self.length[p] + 1)
+                self.next[clone] = self.next[q].copy()
+                self.link[clone] = self.link[q]
+                self.e[clone] = self.e[q]
+                while p != -1 and self.next[p].get(x, None) == q:
+                    self.next[p][x] = clone
+                    p = self.link[p]
+                self.link[q] = self.link[cur] = clone
+        v = cur
+        while v != -1 and self.e[v] != pos:
+            self.e[v] = pos
+            v = self.link[v]
+        self.last = cur
+
+    def match_next(self, x: int) -> int:
+        p = self.last
+        while p != -1 and x not in self.next[p]:
+            p = self.link[p]
+        if p == -1:
+            return -1
+        return self.next[p][x]
+
+def _rosa_one_sequence(z: List[int]) -> List[int]:
+    n = len(z)
+    y = [-1] * n
+    sam = _SAM()
+    c: List[int] = []
+    last_token = None
+    for t, x in enumerate(z):
+        v = sam.match_next(x)
+        if v != -1 and sam.e[v] >= 0:
+            j_c = sam.e[v]
+            if j_c + 1 < len(c):
+                y[t] = c[j_c + 1]
+        if last_token is None or x != last_token:
+            c.append(x)
+            last_token = x
+            sam.extend(x, pos=len(c) - 1)
+    return y
+
+def rosa_batch_cpu(z_batch: List[List[int]]) -> List[List[int]]:
+    return [_rosa_one_sequence(row) for row in z_batch]
+
+
+def _round_pow2(x: int) -> int:
+    if x < 1:
+        return 1
+    p = 1
+    while p < x:
+        p <<= 1
+    return p
+
+def _calc_rosa_vocab(vocab_size: int) -> int:
+    k = int(round(math.sqrt(vocab_size)))
+    k = max(ROSA_VOCAB_CAP_MIN, min(ROSA_VOCAB_CAP_MAX, k))
+    if ROSA_VOCAB_POW2:
+        k = _round_pow2(k)
+    return int(k)
+
+def patch_qwen3_with_rosa(model: Qwen3ForCausalLM, tau_init: float = TAU_INIT, alpha: float = ROSA_ALPHA):
+    vocab_size = model.config.vocab_size
+    hidden_size = model.config.hidden_size
+    L = model.config.num_hidden_layers
+    K = _calc_rosa_vocab(vocab_size)
+
+    base_param = model.model.embed_tokens.weight
+    base_dtype = base_param.dtype
+    base_device = base_param.device
+
+    for li, layer in enumerate(model.model.layers):
+        if li == 0:
+            continue
+
+        layer.rosa_wlm = nn.Linear(hidden_size, K, bias=False).to(dtype=base_dtype, device=base_device)
+        nn.init.xavier_uniform_(layer.rosa_wlm.weight)
+
+        layer.rosa_emb = nn.Embedding(K + 1, hidden_size).to(dtype=base_dtype, device=base_device)
+        nn.init.normal_(layer.rosa_emb.weight, mean=0.0, std=0.02)
+        with torch.no_grad():
+            layer.rosa_emb.weight.data[0].zero_()
+
+        layer.register_buffer("rosa_tau", torch.tensor(float(tau_init), dtype=torch.float32), persistent=False)
+        layer.rosa_alpha = float(alpha)
+        layer.rosa_vocab_size = K
+
+        def _forward_with_rosa(self: Qwen3DecoderLayer,
+                               hidden_states: torch.Tensor,
+                               attention_mask: Optional[torch.Tensor] = None,
+                               position_ids: Optional[torch.LongTensor] = None,
+                               past_key_values=None,
+                               use_cache: Optional[bool] = False,
+                               cache_position: Optional[torch.LongTensor] = None,
+                               position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                               **kwargs):
+
+            residual = hidden_states
+            u = self.input_layernorm(hidden_states)
+
+            wlm_dtype = self.rosa_wlm.weight.dtype
+            logits = F.linear(u.to(wlm_dtype), self.rosa_wlm.weight, None).to(u.dtype)
+            z_gpu = torch.argmax(logits, dim=-1)
+
+            attn_out, _ = self.self_attn(
+                hidden_states=u, attention_mask=attention_mask,
+                position_ids=position_ids, past_key_values=past_key_values,
+                use_cache=use_cache, cache_position=cache_position,
+                position_embeddings=position_embeddings, **kwargs,
+            )
+
+            z_list: List[List[int]] = z_gpu.detach().cpu().tolist()
+
+            y_list: List[List[int]] = rosa_batch_cpu(z_list)
+
+            p_fp32 = F.softmax(logits.float(), dim=-1)
+            emb_weight = self.rosa_emb.weight
+            if emb_weight.dtype != torch.float32:
+                emb_weight = emb_weight.to(torch.float32)
+            emb_nz = emb_weight[1:, :]
+            v_soft = torch.matmul(p_fp32, emb_nz).to(u.dtype)
+
+            y = torch.tensor(y_list, dtype=torch.long, device=logits.device)
+            y_idx = torch.where(y >= 0, y + 1, torch.zeros_like(y))
+            v_hard = F.embedding(y_idx, self.rosa_emb.weight).to(u.dtype)
+            v = v_soft + (v_hard - v_soft).detach()
+
+            hidden_states = residual + attn_out + v
+
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+            return hidden_states
+
+        layer.forward = types.MethodType(_forward_with_rosa, layer)
+
+    meta = {
+        "rosa_vocab_size_per_layer": {
+            str(i): (getattr(model.model.layers[i], "rosa_vocab_size", 0)) for i in range(L)
+        },
+        "alpha": alpha,
+        "tau_init": tau_init,
+        "apply_layers_from": 1,
+        "base_dtype": str(base_dtype),
+    }
+    with open(os.path.join(OUTPUT_DIR, SAVE_AUX_JSON), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
+    config = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
+    config.sliding_window = ATTN_WINDOW
+    config.max_window_layers = FIRST_GLOBAL_LAYERS
+    if (not hasattr(config, "layer_types")) or (config.layer_types is None):
+        config.layer_types = [
+            "full_attention" if i < config.max_window_layers else "sliding_attention"
+            for i in range(config.num_hidden_layers)
+        ]
+    if hasattr(config, "attn_implementation"):
+        config.attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+    else:
+        config._attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_DIR, use_fast=True)
+    model = Qwen3ForCausalLM.from_pretrained(
+        MODEL_LOCAL_DIR,
+        config=config,
+        torch_dtype=torch.bfloat16 if BF16 else torch.float16,
+        low_cpu_mem_usage=True,
+    )
+
+    if GRADIENT_CHECKPOINTING:
+        model.gradient_checkpointing_enable()
+    else:
+        model.gradient_checkpointing_disable()
+
+    model.config.use_cache = False
+
+    patch_qwen3_with_rosa(model, tau_init=TAU_INIT, alpha=ROSA_ALPHA)
+    return model, tokenizer
+
+
+def save_rosa_only(model: Qwen3ForCausalLM, out_dir: str):
+    state = {}
+    for i, layer in enumerate(model.model.layers):
+        if hasattr(layer, "rosa_wlm"):
+            state[f"model.layers.{i}.rosa_wlm.weight"] = layer.rosa_wlm.weight.detach().cpu()
+        if hasattr(layer, "rosa_emb"):
+            state[f"model.layers.{i}.rosa_emb.weight"] = layer.rosa_emb.weight.detach().cpu()
+    path = os.path.join(out_dir, SAVE_STATE_DICT_NAME)
+    torch.save(state, path)
+    print(f"[save] saved ROSA-only params to: {path}")
+
+
+def build_optimizer_params(model):
+    wlm_params, emb_params, backbone_params = [], [], []
+    for n, p in model.named_parameters():
+        if "rosa_wlm" in n:
+            wlm_params.append(p)
+        elif "rosa_emb" in n:
+            emb_params.append(p)
+        else:
+            backbone_params.append(p)
+
+    param_groups = [
+        {"params": wlm_params, "lr": LR_ROSA, "weight_decay": WEIGHT_DECAY},
+        {"params": emb_params, "lr": LR_ROSA, "weight_decay": 0.0},
+    ]
+    if LR_BACKBONE and LR_BACKBONE > 0.0:
+        no_decay, has_decay = [], []
+        for n, p in model.named_parameters():
+            if ("rosa_" in n):
+                continue
+            if any(k in n.lower() for k in ["bias", "norm", "layernorm", "ln"]):
+                no_decay.append(p)
+            else:
+                has_decay.append(p)
+        param_groups += [
+            {"params": has_decay, "lr": LR_BACKBONE, "weight_decay": WEIGHT_DECAY},
+            {"params": no_decay, "lr": LR_BACKBONE, "weight_decay": 0.0},
+        ]
+    else:
+        for p in backbone_params:
+            p.requires_grad_(False)
+
+    return param_groups
+
+from transformers.trainer_callback import TrainerCallback
+
+def is_main_process() -> bool:
+    return _env_int("", 0) == 0
+
+class RosaZeroRowCallback(TrainerCallback):
+    def on_init_end(self, args, state, control, model=None, **kwargs):
+        if model is not None:
+            with torch.no_grad():
+                for layer in model.model.layers:
+                    if hasattr(layer, "rosa_emb"):
+                        layer.rosa_emb.weight.data[0].zero_()
+        return control
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if model is not None:
+            with torch.no_grad():
+                for layer in model.model.layers:
+                    if hasattr(layer, "rosa_emb"):
+                        layer.rosa_emb.weight.data[0].zero_()
+        return control
+
+
+class RosaTauAnnealCallback(TrainerCallback):
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if model is None:
+            return control
+        progress = min(1.0, state.global_step / max(1, args.max_steps or state.max_steps))
+        tau_now = TAU_INIT + (TAU_MIN - TAU_INIT) * progress
+        with torch.no_grad():
+            for layer in model.model.layers:
+                if hasattr(layer, "rosa_tau"):
+                    layer.rosa_tau.copy_(torch.tensor(float(tau_now)))
+        return control
+
+
+def main():
+    set_seed(SEED)
+
+    raw = load_from_disk(DATASET_DIR)
+    train_ds = raw["train"]
+    test_ds = raw.get("test", raw["validation"] if "validation" in raw else None)
+    assert test_ds is not None, "需要存在 test 或 validation split"
+
+    model, tokenizer = build_model_and_tokenizer()
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    data_collator = FixedLenLMCollator(pad_token_id=pad_id, seq_len=SEQ_LEN)
+
+    training_args = TrainingArguments(
+        output_dir=OUTPUT_DIR,
+        num_train_epochs=NUM_EPOCHS,
+        per_device_train_batch_size=PER_DEVICE_TRAIN_BSZ,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=GRAD_ACCUM_STEPS,
+        learning_rate=LR_ROSA,
+        warmup_steps=WARMUP_STEPS,
+        logging_steps=LOGGING_STEPS,
+        eval_steps=EVAL_STEPS,
+        save_strategy="no",
+        report_to="none",
+        fp16=(not BF16) and torch.cuda.is_available(),
+        bf16=BF16,
+        dataloader_num_workers=2,
+        gradient_checkpointing=GRADIENT_CHECKPOINTING,
+        remove_unused_columns=False,
+        optim="adamw_torch",
+    )
+
+    optimizer_params = build_optimizer_params(model)
+
+    class _Trainer(Trainer):
+        def create_optimizer(self):
+            if self.optimizer is None:
+                self.optimizer = torch.optim.AdamW(optimizer_params, betas=(0.9, 0.98), eps=1e-8)
+            return self.optimizer
+
+    trainer = _Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_ds,
+        eval_dataset=test_ds,
+        data_collator=data_collator,
+        tokenizer=tokenizer,
+        callbacks=[RosaZeroRowCallback(), RosaTauAnnealCallback()],
+    )
+
+    trainer.train()
+
+    metrics = trainer.evaluate()
+
+    meta = {
+        "model_local_dir": MODEL_LOCAL_DIR,
+        "dataset_dir": DATASET_DIR,
+        "seq_len": SEQ_LEN,
+        "attn_window": ATTN_WINDOW,
+        "first_global_layers": FIRST_GLOBAL_LAYERS,
+        "rosa": {
+            "alpha": ROSA_ALPHA, "tau_init": TAU_INIT, "tau_min": TAU_MIN,
+            "lr_rosa": LR_ROSA, "lr_backbone": LR_BACKBONE,
+            "k_per_layer": {str(i): (getattr(model.model.layers[i], "rosa_vocab_size", 0))
+                            for i in range(model.config.num_hidden_layers)}
+        },
+        "metrics": metrics, "time": time.asctime(),
+    }
+
+    if is_main_process():
+        print("[eval] metrics:", metrics)
+        save_rosa_only(model, OUTPUT_DIR)
+        with open(os.path.join(OUTPUT_DIR, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        print(f"[done] meta saved at {os.path.join(OUTPUT_DIR, 'run_meta.json')}")
+
+
+if __name__ == "__main__":
+    main()

@@ -16,7 +16,7 @@ Resource advantages: ROSA core is parameter-free and runs on CPU, while GPU only
 
 - Base model: Qwen3-0.6B with global attention or windowed attention
 - Training: 28,000 samples, 1 epoch, original model frozen, only ROSA adapters trained
-- Evaluation: PG-19 dataset, sequence length 64k, window size 1024
+- Evaluation: PG-19 dataset, sequence length 16k, window size 1024
 
 ### Perplexity (PPL) Comparison On Validation Datasets
 

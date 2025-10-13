@@ -4,7 +4,7 @@
 
 ROSA-Tuning adds minimal per-layer discrete adapter parameters (W_lm^(ℓ), E^(ℓ)) while keeping the pretrained model frozen, enabling windowed attention models to achieve near-global ultra-long-range memory capabilities.
 
-Practical results: After replacing global attention with windowed attention in Qwen2.5, adding ROSA branch and freezing the original model, training for one epoch on 28,000 samples achieves better PPL on PG-19-16k than the original global attention model.
+Practical results: After replacing global attention with windowed attention in Qwen3-0.6B, adding ROSA branch and freezing the original model, training for one epoch on 28,000 samples achieves better PPL on PG-19-16k than the original global attention model.
 
 Resource advantages: ROSA core is parameter-free and runs on CPU, while GPU only handles small matrix projection and representation injection; windowed attention can process arbitrary-length contexts (limited by CPU-side index memory), significantly reducing the quadratic complexity cost of global attention.
 
@@ -14,7 +14,7 @@ Resource advantages: ROSA core is parameter-free and runs on CPU, while GPU only
 
 ### Setup
 
-- Base model: Qwen2.5 with global attention replaced by windowed attention
+- Base model: Qwen3-0.6B with global attention replaced by windowed attention
 - Training: 28,000 samples, 1 epoch, original model frozen, only ROSA adapters trained
 - Evaluation: PG-19 dataset, sequence length 64k, window size 1024
 

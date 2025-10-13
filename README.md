@@ -1,4 +1,4 @@
-# ROSA-Tuning: Neurosymbolic Infinite-Range Memory for Windowed Transformers
+# ROSA-Tuning: Enable window-attention to outperform global-attention
 
 ## TL;DR
 

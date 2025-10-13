@@ -418,7 +418,7 @@ def main():
     raw = load_from_disk(DATASET_DIR)
     train_ds = raw["train"]
     test_ds = raw.get("test", raw["validation"] if "validation" in raw else None)
-    assert test_ds is not None, "需要存在 test 或 validation split"
+    assert test_ds is not None, 
 
     model, tokenizer = build_model_and_tokenizer()
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id

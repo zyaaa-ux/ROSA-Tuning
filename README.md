@@ -14,7 +14,7 @@ Resource advantages: ROSA core is parameter-free and runs on CPU, while GPU only
 
 ### Setup
 
-- Base model: Qwen3-0.6B with global attention replaced by windowed attention
+- Base model: Qwen3-0.6B with global attention or windowed attention
 - Training: 28,000 samples, 1 epoch, original model frozen, only ROSA adapters trained
 - Evaluation: PG-19 dataset, sequence length 64k, window size 1024
 

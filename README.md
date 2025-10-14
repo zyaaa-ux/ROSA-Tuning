@@ -38,10 +38,7 @@ ROSA enables windowed attention to outperform the global attention baseline.
 For the $\ell$-th layer hidden representation $h^{(\ell)} \in \mathbb{R}^{T\times d}$:
 
 $$
-h^{(\ell+1)} = h^{(\ell)}
-+ \mathrm{Attn}^{(\ell)}_{\text{win}}(\mathrm{LN}(h^{(\ell)}))
-+ v^{(\ell)}
-+ \mathrm{MLP}^{(\ell)}(\mathrm{LN}(\cdot))
+h^{(\ell+1)} = h^{(\ell)} + \mathrm{Attn}^{(\ell)}_{\text{win}}(\mathrm{LN}(h^{(\ell)})) + v^{(\ell)} + \mathrm{MLP}^{(\ell)}(\mathrm{LN}(\cdot))
 $$
 
 The ROSA branch $v^{(\ell)}$ is computed as:
@@ -69,29 +66,21 @@ $$
 ### Layer $\ell \ge 1$ (window attention + multi-route ROSA)
 
 $$
-u^{(\ell)} = \mathrm{LN}_1(h^{(\ell)}), \quad
-a^{(\ell)} = \mathrm{Attn}^{(\ell)}_{\mathrm{win}}(u^{(\ell)}).
+u^{(\ell)} = \mathrm{LN}_1(h^{(\ell)}), \quad a^{(\ell)} = \mathrm{Attn}^{(\ell)}_{\mathrm{win}}(u^{(\ell)}).
 $$
 
 $$
-\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}u^{(\ell)}, \quad
-p^{(\ell,m)} = \mathrm{softmax}(\mathbf{logits}^{(\ell,m)}), \quad
-z^{(\ell,m)} = \arg\max(\mathbf{logits}^{(\ell,m)}).
+\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}u^{(\ell)}, \quad p^{(\ell,m)} = \mathrm{softmax}(\mathbf{logits}^{(\ell,m)}), \quad z^{(\ell,m)} = \arg\max(\mathbf{logits}^{(\ell,m)}).
 $$
 
 ### Index-view RLE and ROSA Retrieval
 
 $$
-c^{(\ell,m)}_{<t} = \mathcal{C}(z^{(\ell,m)}_{<t}), \quad
-\mathcal{C}(1,1,1,2,2,3) = (1,2,3).
+c^{(\ell,m)}_{<t} = \mathcal{C}(z^{(\ell,m)}_{<t}), \quad \mathcal{C}(1,1,1,2,2,3) = (1,2,3).
 $$
 
 $$
-y^{(\ell,m)}_t =
-\begin{cases}
-c^{(\ell,m)}_{j_{\text{last}}(z^{(\ell,m)}_t)+1}, & j_{\text{last}}(z^{(\ell,m)}_t)+1 < |c^{(\ell,m)}_{<t}|,\\
--1, & \text{otherwise}.
-\end{cases}
+y^{(\ell,m)}_t = \begin{cases} c^{(\ell,m)}_{j_{\text{last}}(z^{(\ell,m)}_t)+1}, & j_{\text{last}}(z^{(\ell,m)}_t)+1 < |c^{(\ell,m)}_{<t}|,\\ -1, & \text{otherwise}. \end{cases}
 $$
 
 $$
@@ -105,10 +94,8 @@ v^{(\ell)} = \frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}[\hat y^{(\ell,m)}],
 $$
 
 $$
-h^{(\ell+1)} = h^{(\ell)} + a^{(\ell)} + v^{(\ell)} +
-\mathrm{MLP}^{(\ell)}(\mathrm{LN}_2(h^{(\ell)} + a^{(\ell)} + v^{(\ell)})).
+h^{(\ell+1)} = h^{(\ell)} + a^{(\ell)} + v^{(\ell)} + \mathrm{MLP}^{(\ell)}(\mathrm{LN}_2(h^{(\ell)} + a^{(\ell)} + v^{(\ell)})).
 $$
-
 
 ### LCG (Local Counterfactual Gradient)
 
@@ -117,27 +104,15 @@ g^{(\ell)}_t = \frac{\partial \mathcal{L}}{\partial v^{(\ell)}_t}.
 $$
 
 $$
-\Delta L_i^{(\ell,m)}(k) \approx
-\sum_{t \in S_i^{(\ell,m)}(k)}
-(g^{(\ell)}_t)^\top
-(E^{(\ell,m)}[\hat y^{(\ell,m)}_t(i \!\leftarrow\! k)] - E^{(\ell,m)}[\hat y^{(\ell,m)}_t]).
+\Delta L_i^{(\ell,m)}(k) \approx \sum_{t \in S_i^{(\ell,m)}(k)} (g^{(\ell)}_t)^\top (E^{(\ell,m)}[\hat y^{(\ell,m)}_t(i \!\leftarrow\! k)] - E^{(\ell,m)}[\hat y^{(\ell,m)}_t]).
 $$
 
 $$
-\frac{\partial \mathbb{E}[\mathcal{L}]}{\partial \mathbf{logits}^{(\ell,m)}_{i,v}} =
-p^{(\ell,m)}_{i,v}
-\Big(
-\Delta L_i^{(\ell,m)}(v) -
-\sum_{k} p^{(\ell,m)}_{i,k} \Delta L_i^{(\ell,m)}(k)
-\Big).
+\frac{\partial \mathbb{E}[\mathcal{L}]}{\partial \mathbf{logits}^{(\ell,m)}_{i,v}} = p^{(\ell,m)}_{i,v} \Big( \Delta L_i^{(\ell,m)}(v) - \sum_{k} p^{(\ell,m)}_{i,k} \Delta L_i^{(\ell,m)}(k) \Big).
 $$
 
 $$
-\frac{\partial \mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}} =
-(u^{(\ell)})^\top
-\frac{\partial \mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \quad
-\frac{\partial \mathcal{L}}{\partial E^{(\ell,m)}[r]} =
-\frac{1}{M} \sum_t \mathbf{1}\{\hat y^{(\ell,m)}_t = r\} g^{(\ell)}_t.
+\frac{\partial \mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}} = (u^{(\ell)})^\top \frac{\partial \mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \quad \frac{\partial \mathcal{L}}{\partial E^{(\ell,m)}[r]} = \frac{1}{M} \sum_t \mathbf{1}\{\hat y^{(\ell,m)}_t = r\} g^{(\ell)}_t.
 $$
 
 ---

@@ -97,7 +97,7 @@ $$
 h^{(\ell+1)} = h^{(\ell)} + a^{(\ell)} + v^{(\ell)} + \mathrm{MLP}^{(\ell)}(\mathrm{LN}_2(h^{(\ell)} + a^{(\ell)} + v^{(\ell)})).
 $$
 
-### LCG (Local Counterfactual Gradient)
+### LCG 
 
 $$
 g^{(\ell)}_t = \frac{\partial \mathcal{L}}{\partial v^{(\ell)}_t}.

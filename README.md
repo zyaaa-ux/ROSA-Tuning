@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-**ROSA-Tuning** adds minimal per-layer discrete adapter parameters \\( W_{lm}^{(\ell)}, E^{(\ell)} \\) while keeping the pretrained model frozen, enabling windowed attention models to achieve even better ultra-long-range memory capabilities than global attention.
+**ROSA-Tuning** adds minimal per-layer discrete adapter parameters $W_{lm}^{(\ell)}, E^{(\ell)}$ while keeping the pretrained model frozen, enabling windowed attention models to achieve even better ultra-long-range memory capabilities than global attention.
 
 **Practical results:** After replacing global attention with windowed attention in Qwen3-0.6B, adding ROSA branch and freezing the original model, training for one epoch on 28,000 samples achieves better PPL on PG-19-16k than the original global attention model.
 
@@ -35,7 +35,7 @@ ROSA enables windowed attention to outperform the global attention baseline.
 
 ### Core Formula
 
-For the \\( \ell \\)-th layer hidden representation \\( h^{(\ell)} \in \mathbb{R}^{T\times d} \\):
+For the $\ell$-th layer hidden representation $h^{(\ell)} \in \mathbb{R}^{T\times d}$:
 
 $$
 h^{(\ell+1)} = h^{(\ell)}
@@ -44,7 +44,7 @@ h^{(\ell+1)} = h^{(\ell)}
 + \mathrm{MLP}^{(\ell)}(\mathrm{LN}(\cdot))
 $$
 
-The ROSA branch \\( v^{(\ell)} \\) is computed as:
+The ROSA branch $v^{(\ell)}$ is computed as:
 
 $$
 \begin{aligned}
@@ -62,11 +62,11 @@ $$
 
 ## Update · 2025-10-14
 
-- Added **multi-route ROSA**: each layer has M independent routes \\( \{W_{lm}^{(\ell,m)}, E^{(\ell,m)}\} \\); injected as the mean of all routes.  
+- Added **multi-route ROSA**: each layer has M independent routes $\{W_{lm}^{(\ell,m)}, E^{(\ell,m)}\}$; injected as the mean of all routes.  
 - Removed all temperature and scaling factors; fully hard forward path.  
-- Replaced STE with **Local Counterfactual Gradient (LCG)**; CPU computes \\( \Delta L_i(k) \\) by “change-one-token” simulation and writes position-wise contrastive gradients to logits.  
+- Replaced STE with **Local Counterfactual Gradient (LCG)**; CPU computes $\Delta L_i(k)$ by "change-one-token" simulation and writes position-wise contrastive gradients to logits.  
 
-### Layer \\( \ell \ge 1 \\) (window attention + multi-route ROSA)
+### Layer $\ell \ge 1$ (window attention + multi-route ROSA)
 
 $$
 u^{(\ell)} = \mathrm{LN}_1(h^{(\ell)}), \quad
@@ -144,23 +144,23 @@ $$
 
 ### Run-Length Collapse in Index View
 
-For historical discrete sequence \\( z_{<t} \\), apply run-length collapse only in ROSA’s index view:
+For historical discrete sequence $z_{<t}$, apply run-length collapse only in ROSA's index view:
 
 $$
 \mathcal{C}(1,1,1,2,2,3) = (1,2,3)
 $$
 
-Maintain an online **Suffix Automaton (SAM)** on the collapsed string \\( \mathcal{C}(z_{<t}) \\).  
-During query, find the longest and most recent historical match ending with the current suffix, and output its next different token as \\( y_t \\).
+Maintain an online **Suffix Automaton (SAM)** on the collapsed string $\mathcal{C}(z_{<t})$.  
+During query, find the longest and most recent historical match ending with the current suffix, and output its next different token as $y_t$.
 
 **Retrieve-then-commit:**  
-At step *t*, first retrieve \\( y_t \\) from the collapsed index, then write \\( z_t \\) to the index using collapse policy.
+At step *t*, first retrieve $y_t$ from the collapsed index, then write $z_t$ to the index using collapse policy.
 
 ---
 
 ### CPU/GPU Parallelism
 
-- **GPU:** Windowed attention + \\( W_{lm} \\) projection + softmax + embedding/residual  
+- **GPU:** Windowed attention + $W_{lm}$ projection + softmax + embedding/residual  
 - **CPU:** Parameter-free ROSA (SAM construction and matching) operates on integer sequences  
 
 ---
@@ -168,9 +168,9 @@ At step *t*, first retrieve \\( y_t \\) from the collapsed index, then write \\(
 ## Core Advantages
 
 - **Infinite-range, lossless memory:** ROSA performs exact substring matching and copies true historical successors, with retrieval range unlimited by window size.  
-- **Minimal GPU overhead:** ROSA core is parameter-free and runs on CPU; GPU only performs small vocabulary projection and representation injection, significantly saving the \\( O(T^2) \\) cost of global attention.  
-- **Windowed attention handles arbitrary-length sequences:** Cross-window information passes through ROSA’s discrete channel, while windowed attention only performs local fusion.  
-- **Maintains trainability:** STE achieves both hard copy and soft gradients; per-layer independent \\( \{W_{lm}^{(\ell)}, E^{(\ell)}\} \\) enables the network to learn internal discrete language, evolving layer-by-layer into symbol streams efficiently retrievable by ROSA.  
+- **Minimal GPU overhead:** ROSA core is parameter-free and runs on CPU; GPU only performs small vocabulary projection and representation injection, significantly saving the $O(T^2)$ cost of global attention.  
+- **Windowed attention handles arbitrary-length sequences:** Cross-window information passes through ROSA's discrete channel, while windowed attention only performs local fusion.  
+- **Maintains trainability:** STE achieves both hard copy and soft gradients; per-layer independent $\{W_{lm}^{(\ell)}, E^{(\ell)}\}$ enables the network to learn internal discrete language, evolving layer-by-layer into symbol streams efficiently retrievable by ROSA.  
 
 ---
 

@@ -1,8 +1,8 @@
-# ROSA-Tuning: Make window-attention better than global-attention
+# ROSA-Tuning: Turning Global Attention into Better Window Attention
 
 ## TL;DR
 
-ROSA-Tuning adds minimal per-layer discrete adapter parameters (W_lm^(ℓ), E^(ℓ)) while keeping the pretrained model frozen, enabling windowed attention models to achieve near-global ultra-long-range memory capabilities.
+ROSA-Tuning adds minimal per-layer discrete adapter parameters (W_lm^(ℓ), E^(ℓ)) while keeping the pretrained model frozen, enabling windowed attention models to achieve even better ultra-long-range memory capabilities than global attention.
 
 Practical results: After replacing global attention with windowed attention in Qwen3-0.6B, adding ROSA branch and freezing the original model, training for one epoch on 28,000 samples achieves better PPL on PG-19-16k than the original global attention model.
 
@@ -22,7 +22,8 @@ Resource advantages: ROSA core is parameter-free and runs on CPU, while GPU only
 
 - Global Attention: 31.96
 - Windowed Attention: 465.59
-- Windowed Attention + ROSA: 25.96
+- Windowed Attention + ROSA (2025.10.13): 25.96  
+- Windowed Attention + ROSA (2025.10.14): 20.01
 
 ROSA enables windowed attention to outperform the global attention baseline.
 
@@ -55,11 +56,78 @@ v^{(\ell)} &= v^{(\ell)}_{\text{hard}} + \mathrm{sg}\big(v^{(\ell)}_{\text{soft}
 \end{aligned}
 $$
 
-### Key Design
+## Update · 2025-10-14
 
-- Miss representation: CPU-side ROSA returns -1 for misses; GPU-side applies +1 offset uniformly, making Emb[0] = 0
-- Straight-Through Estimator (STE): Forward pass injects hard copy (v_hard), backward pass propagates gradients through soft expectation (v_soft)
-- Per-layer independent parameters: {W_lm^(ℓ), Emb^(ℓ)} are not shared across layers
+- Added multi-route ROSA: each layer has M independent routes {W_lm^(ℓ,m), E^(ℓ,m)}; injected as the mean of all routes.   
+- Removed all temperature and scaling factors; fully hard forward path.  
+- Replaced STE with Local Counterfactual Gradient (LCG); CPU computes ΔL_i(k) by “change-one-token” simulation and writes position-wise contrastive gradients to logits.  
+
+
+#### Layer ℓ ≥ 1 (window attention + multi-route ROSA)
+\[
+u^{(\ell)} = \mathrm{LN}_1(h^{(\ell)}),\quad
+a^{(\ell)} = \mathrm{Attn}^{(\ell)}_{\mathrm{win}}(u^{(\ell)}).
+\]
+\[
+\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}u^{(\ell)},\quad
+p^{(\ell,m)} = \mathrm{softmax}(\mathbf{logits}^{(\ell,m)}),\quad
+z^{(\ell,m)} = \arg\max(\mathbf{logits}^{(\ell,m)}).
+\]
+
+#### Index-view RLE and ROSA retrieval
+\[
+c^{(\ell,m)}_{<t} = \mathcal{C}(z^{(\ell,m)}_{<t}),\quad
+\mathcal{C}(1,1,1,2,2,3) = (1,2,3).
+\]
+\[
+y^{(\ell,m)}_t =
+\begin{cases}
+c^{(\ell,m)}_{j_{\text{last}}(z^{(\ell,m)}_t)+1}, & j_{\text{last}}(z^{(\ell,m)}_t)+1 < |c^{(\ell,m)}_{<t}|,\\
+-1, & \text{otherwise}.
+\end{cases}
+\]
+\[
+\hat y^{(\ell,m)}_t = y^{(\ell,m)}_t + 1,\quad E^{(\ell,m)}[0] = 0.
+\]
+
+#### Multi-route injection and output
+\[
+v^{(\ell)} = \frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}[\hat y^{(\ell,m)}],
+\]
+\[
+h^{(\ell+1)} = h^{(\ell)} + a^{(\ell)} + v^{(\ell)}
++ \mathrm{MLP}^{(\ell)}(\mathrm{LN}_2(h^{(\ell)} + a^{(\ell)} + v^{(\ell)})).
+\]
+
+
+### LCG (Local Counterfactual Gradient)
+
+\[
+g^{(\ell)}_t = \frac{\partial \mathcal{L}}{\partial v^{(\ell)}_t}.
+\]
+\[
+\Delta L_i^{(\ell,m)}(k) \approx
+\sum_{t \in S_i^{(\ell,m)}(k)}
+(g^{(\ell)}_t)^\top
+(E^{(\ell,m)}[\hat y^{(\ell,m)}_t(i \!\leftarrow\! k)] - E^{(\ell,m)}[\hat y^{(\ell,m)}_t]).
+\]
+\[
+\frac{\partial \mathbb{E}[\mathcal{L}]}{\partial \mathbf{logits}^{(\ell,m)}_{i,v}} =
+p^{(\ell,m)}_{i,v}
+\Big(
+\Delta L_i^{(\ell,m)}(v) -
+\sum_{k} p^{(\ell,m)}_{i,k} \Delta L_i^{(\ell,m)}(k)
+\Big).
+\]
+\[
+\frac{\partial \mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}} =
+(u^{(\ell)})^\top
+\frac{\partial \mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}},
+\quad
+
+\frac{\partial \mathcal{L}}{\partial E^{(\ell,m)}[r]} =
+\frac{1}{M} \sum_t \mathbf{1}\{\hat y^{(\ell,m)}_t = r\} g^{(\ell)}_t.
+\]
 
 ### Run-Length Collapse in Index View
 
@@ -75,7 +143,6 @@ Retrieve-then-commit: At step t, first retrieve $y_t$ from the collapsed index, 
 
 - GPU: Windowed attention + W_lm projection + softmax + embedding/residual
 - CPU: Parameter-free ROSA (SAM construction and matching) operates on integer sequences
-- Data path: logits → argmax(z) placed in pinned memory → async transfer to CPU → CPU computes y → return to GPU for embedding and STE composition; runs concurrently with GPU attention
 
 ---
 
@@ -103,3 +170,7 @@ Proposes using Suffix Automaton for neurosymbolic infinite-range, lossless infor
 More detailed experiments, hardware optimizations, more powerful ROSA-Tuning methods, and related papers will be released soon.
 
 Additionally, this project will release new ROSA-Tuning methods daily in the coming days. Stay tuned.
+
+
+
+

@@ -1,4 +1,4 @@
-# ROSA-Tuning: Turning Global Attention into Better Window Attention
+# ROSA-Tuning: Tuning Global Attention into Better Window Attention
 
 ## TL;DR
 
@@ -109,7 +109,6 @@ h^{(\ell+1)} = h^{(\ell)} + a^{(\ell)} + v^{(\ell)} +
 \mathrm{MLP}^{(\ell)}(\mathrm{LN}_2(h^{(\ell)} + a^{(\ell)} + v^{(\ell)})).
 $$
 
----
 
 ### LCG (Local Counterfactual Gradient)
 

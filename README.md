@@ -1,4 +1,4 @@
-# ROSA-Tuning: Make window-attention greater than global-attention
+# ROSA-Tuning: Make window-attention better than global-attention
 
 ## TL;DR
 

@@ -778,7 +778,7 @@ def main():
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"总参数:        {total_params:,}")
+    print(f"        {total_params:,}")
 
     trainer.train()
     metrics = trainer.evaluate()

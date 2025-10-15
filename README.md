@@ -66,15 +66,6 @@ $$
 
 
 
-### Multi-route Injection and Output
-
-$$
-v^{(\ell)} = \frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}[\hat y^{(\ell,m)}],
-$$
-
-$$
-h^{(\ell+1)} = h^{(\ell)} + a^{(\ell)} + v^{(\ell)} + \mathrm{MLP}^{(\ell)}(\mathrm{LN}_2(h^{(\ell)} + a^{(\ell)} + v^{(\ell)})).
-$$
 
 ### LCG 
 

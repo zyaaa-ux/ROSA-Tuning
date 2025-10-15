@@ -35,73 +35,59 @@ import threading
 import os
 import atexit
 
-# =========================
-# 全局变量（路径 / 设备 / 超参）
-# =========================
-# ---- defaults: enabled unless explicitly disabled ----
 import os as _os
-_os.environ.setdefault("ROSA_USE_NUMBA", "1")
-_os.environ.setdefault("ROSA_NUMBA_PARALLEL", "1")
-_os.environ.setdefault("LCG_ENABLE", "1")
+_os.environ.setdefault("ROSA_USE_NUMBA", "")
+_os.environ.setdefault("ROSA_NUMBA_PARALLEL", "")
+_os.environ.setdefault("LCG_ENABLE", "")
 
-# flags (respect explicit 0/false)
-_USE_NUMBA = _os.environ.get("ROSA_USE_NUMBA", "1").lower() not in ("0", "false")
-_PARALLEL  = _os.environ.get("ROSA_NUMBA_PARALLEL", "1").lower() not in ("0", "false")
+_USE_NUMBA = _os.environ.get("ROSA_USE_NUMBA", "").lower() not in ("0", "false")
+_PARALLEL  = _os.environ.get("ROSA_NUMBA_PARALLEL", "").lower() not in ("0", "false")
 
-# try numba; fall back cleanly if unavailable
 try:
     import numba as _nb
-    _NUMBA_OK = _USE_NUMBA  # only true if user didn't disable
+    _NUMBA_OK = _USE_NUMBA
 except Exception:
     _NUMBA_OK = False
 
 
-# --- 资源路径 ---
-MODEL_LOCAL_DIR = "/lpai/volumes/base-base-ali-sh-mix/zhengyunao/zhengyunao/stage6/Qwen__Qwen3-0.6B/main/"
-DATASET_DIR     = "/lpai/volumes/base-base-ali-sh-mix/zhengyunao/zhengyunao/stage6/emozilla__pg19/23-10-09-1506/tokenized_qwen4k/"
-OUTPUT_DIR      = "/lpai/volumes/base-base-ali-sh-mix/zhengyunao/zhengyunao/stage6/10.13rosa/rosa_qwen3_0_6B_pg19_multiroute_lcg"
+MODEL_LOCAL_DIR = ""
+DATASET_DIR     = ""
+OUTPUT_DIR      = ""
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- 训练与模型 ---
-USE_FLASH_ATTN = True
-BF16 = True if torch.cuda.is_available() else False
+USE_FLASH_ATTN = None
+BF16 = None
 
-SEQ_LEN = 4096
-ATTN_WINDOW = 1024
-FIRST_GLOBAL_LAYERS = 1  # 第 0 层保留全局注意
+SEQ_LEN = None
+ATTN_WINDOW = None
+FIRST_GLOBAL_LAYERS = None
 
-# --- ROSA（多路）与 LCG 超参（全部通过全局变量配置） ---
-ROSA_NUM_ROUTES: int = 4        # 每层路数 M（几十路）
-ROSA_VOCAB_SIZE: int = 64       # 每路词表 K（含 0 作为“无命中”的额外行在 Embedding 里体现为 K+1）
-LCG_TOPK: int = 16                # 每位置候选 Top-K（建议 8~16）
-LCG_POS_SUBSAMPLE: float = 1.0   # 位置子采样比率（1.0=全位置；可设 0.25/0.5 稳控负载）
-ROSA_CPU_WORKERS: int = 128  # 每 rank CPU worker 数
+ROSA_NUM_ROUTES: int = None
+ROSA_VOCAB_SIZE: int = None
+LCG_TOPK: int = None
+LCG_POS_SUBSAMPLE: float = None
+ROSA_CPU_WORKERS: int = None
 
 
-# --- 优化 / 训练 ---
-LR_ROSA = 1e-3
-LR_BACKBONE = 0.0               # 0 => 冻结主干
-WEIGHT_DECAY = 0.01
-WARMUP_STEPS = 20
-NUM_EPOCHS = 1
-PER_DEVICE_TRAIN_BSZ = 1
-GRAD_ACCUM_STEPS = 1
-LOGGING_STEPS = 20
-EVAL_STEPS = 200
-SEED = 42
+LR_ROSA = None
+LR_BACKBONE = None
+WEIGHT_DECAY = None
+WARMUP_STEPS = None
+NUM_EPOCHS = None
+PER_DEVICE_TRAIN_BSZ = None
+GRAD_ACCUM_STEPS = None
+LOGGING_STEPS = None
+EVAL_STEPS = None
+SEED = None
 
-SAVE_STATE_DICT_NAME = "rosa_adapters.pt"
+SAVE_STATE_DICT_NAME = ""
 
-# ### 冻结主干 ⇒ 建议关闭 gradient checkpointing（避免无 grad 输入触发报错）
 GRADIENT_CHECKPOINTING = bool(LR_BACKBONE and LR_BACKBONE > 0.0)
 
-_ROSA_POOL = None             # type: ProcessPoolExecutor | None
-_ROSA_POOL_PID = None         # 记录创建该池的进程 PID，PID 变了就重建
+_ROSA_POOL = None
+_ROSA_POOL_PID = None
 _ROSA_POOL_LOCK = threading.Lock()
 
-# =========================
-# 环境信息 & 每 rank CPU 配额
-# =========================
 
 def _env_int(k, default):
     try:
@@ -113,7 +99,6 @@ LOCAL_WORLD_SIZE = _env_int("LOCAL_WORLD_SIZE", max(1, torch.cuda.device_count()
 LOCAL_RANK = _env_int("LOCAL_RANK", 0)
 GLOBAL_RANK = _env_int("RANK", 0)
 
-# === 新增：NVTX（可选，便于 Nsight 观测） ===
 try:
     import torch.cuda.nvtx as nvtx
 except Exception:
@@ -122,14 +107,12 @@ except Exception:
         def range_pop(self): pass
     nvtx = _DummyNVTX()
 
-# === 新增：线程池用于同进程异步 CPU 计算（与 GPU 重叠） ===
 from concurrent.futures import ThreadPoolExecutor
 _ROSA_THREAD_POOL = ThreadPoolExecutor(
     max_workers=max(1, _env_int("ROSA_THREAD_WORKERS", 2))
 )
 
 def _wait_event(ev: "torch.cuda.Event"):
-    """阻塞当前线程直至 CUDA 事件完成（不阻塞 GPU 流）"""
     try:
         ev.synchronize()
     except Exception:
@@ -138,17 +121,13 @@ def _wait_event(ev: "torch.cuda.Event"):
 
 
 def _available_logical_cpus() -> int:
-    """优先用进程 CPU 亲和性 / cgroup 限制，最后退回 os.cpu_count()。"""
-    # 1) 亲和性（Linux）
     try:
         if hasattr(os, "sched_getaffinity"):
             return max(1, len(os.sched_getaffinity(0)))
     except Exception:
         pass
 
-    # 2) cgroup v1/v2 的 cpuset（容器常见）
     def _parse_cpuset(s: str) -> int:
-        # "0-3,8,10-11" -> 4 + 1 + 2 = 7
         n = 0
         for part in s.split(","):
             part = part.strip()
@@ -171,20 +150,16 @@ def _available_logical_cpus() -> int:
     except Exception:
         pass
 
-    # 3) 兜底
     return max(1, os.cpu_count() or 1)
 
-# === 用这个函数来定义每 rank CPU 上限 ===
 _TOTAL_CPUS = _available_logical_cpus()
 _PER_RANK_CPUS = max(1, _TOTAL_CPUS // max(1, LOCAL_WORLD_SIZE))
 
 
-# 避免二级超订阅
 torch.set_num_threads(_PER_RANK_CPUS)
 
 
 def _rosa_worker_init():
-    # 子进程内禁用多线程BLAS，防止二次超订阅
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
     try:
@@ -197,10 +172,6 @@ import numpy as _np
 import torch
 
 def to_c_np(t: torch.Tensor, dtype=_np.int32):
-    """
-    安全把 torch.Tensor → C 连续 numpy.ndarray（尽量零拷贝）。
-    dtype: 目标 numpy dtype（默认 int32）。
-    """
     return _np.asarray(
         t.detach().to(torch.int32 if dtype is _np.int32 else torch.bool).contiguous().cpu().numpy(),
         order="C",
@@ -208,22 +179,11 @@ def to_c_np(t: torch.Tensor, dtype=_np.int32):
     )
 
 def to_c_bool_np(t: torch.Tensor):
-    """torch.bool/byte → C 连续 numpy.bool_"""
     return _np.asarray(t.detach().to(torch.bool).contiguous().cpu().numpy(), order="C", dtype=_np.bool_)
 
 
 
 class _SAMFoldedCPU:
-    """
-    折叠串 SAM（RLE + Longest&Latest）：
-    - next: [S,K] 转移，-1 表示无。
-    - link: suffix-link。
-    - length: 状态的 maxlen。
-    - e: 右端位置集合的右极值（折叠串下标），用于“最近”。
-    - last: 当前折叠串 c 的 last 状态。
-    - c: 折叠后的符号序列（仅保存每个 run 的首符号）。
-    - last_sym: 上一个原始符号（用于判断是否新 run）。
-    """
     __slots__ = ("next", "link", "length", "e", "last", "size", "K", "c", "last_sym")
 
     def __init__(self, max_states: int, K: int):
@@ -244,11 +204,9 @@ class _SAMFoldedCPU:
         self.length[s] = L
         self.link[s] = -1
         self.e[s] = -1
-        # 注意：next[s,:] 在 extend 时按需填，不用清零
         self.next[s, :].fill(-1)
         return s
 
-    # === 查询：在不改索引的前提下匹配“最长可接受 x”的状态 ===
     def match_next(self, x: int) -> int:
         p = self.last
         nxt = self.next
@@ -257,24 +215,19 @@ class _SAMFoldedCPU:
             p = link[p]
         return -1 if p == -1 else int(nxt[p, x])
 
-    # === 读取“最近后继的不同 token” ===
     def nextdiff_from_state(self, q: int) -> int:
         if q == -1:
             return -1
-        rpos = int(self.e[q])          # 折叠串右端位置
+        rpos = int(self.e[q])
         nxt = rpos + 1
         if 0 <= rpos and nxt < len(self.c):
-            # 折叠串天然保证 c[nxt] != c[rpos]
             return int(self.c[nxt])
         return -1
 
-    # === 仅在 run 变更时 extend（提交阶段）===
     def extend_run(self, x: int):
-        # 追加到折叠串
         self.c.append(x)
         pos = len(self.c) - 1
 
-        # 标准 SAM extend
         last = self.last
         nxt = self.next
         link = self.link
@@ -303,7 +256,6 @@ class _SAMFoldedCPU:
                 link[q]   = clone
                 link[cur] = clone
 
-        # 回填右端位：把“最近结束位 = 当前 pos”沿 suffix‑link 向上推
         v = cur
         while v != -1 and e[v] != pos:
             e[v] = pos
@@ -312,11 +264,9 @@ class _SAMFoldedCPU:
         self.last = cur
         self.last_sym = x
 
-    # === 高层接口：先查询，再按需提交（严格“查询不改索引”）===
     def query_then_commit(self, x: int) -> int:
         q = self.match_next(x)
         a = self.nextdiff_from_state(q)
-        # 仅在新 run 时提交
         if self.last_sym is None or x != self.last_sym:
             self.extend_run(x)
         return a
@@ -324,9 +274,6 @@ class _SAMFoldedCPU:
 
 
 
-# ======================================================
-# 数据集整理
-# ======================================================
 @dataclass
 class FixedLenLMCollator:
     pad_token_id: int
@@ -367,15 +314,12 @@ class FixedLenLMCollator:
 
 
 
-# --------- 多进程池（稳，按每 rank CPU 绑限） ---------
-# === 新增：读取 float 环境变量 ===
 def _env_float(k, default):
     try:
         return float(os.environ.get(k, default))
     except Exception:
         return default
 
-# --------- 多进程池（稳，按每 rank CPU 绑限 + 可控超订阅） ---------
 _ROSA_POOL: Optional[ProcessPoolExecutor] = None
 _ROSA_POOL_PID = None
 _ROSA_POOL_LOCK = threading.Lock()
@@ -384,14 +328,6 @@ def _rosa_pool_ping() -> int:
     return 0
 
 def _get_rosa_pool() -> ProcessPoolExecutor:
-    """
-    绑定到 _PER_RANK_CPUS，同时允许通过 ROSA_POOL_OVERSUB 做“可控超订阅”，
-    以避免在多 GPU 场景下每 rank 只有 1~2 个 worker 导致 CPU 大量空闲。
-    - 环境变量：
-        ROSA_CPU_WORKERS: 目标上限（原有，默认 128）
-        ROSA_POOL_OVERSUB: 相对 _PER_RANK_CPUS 的放大倍数（默认 1.0；可设 2~6）
-        ROSA_POOL_MAX_WORKERS: 硬上限（可选，默认 0 表示不启用）
-    """
     from concurrent.futures import ProcessPoolExecutor
     import multiprocessing as mp
     global _ROSA_POOL, _ROSA_POOL_PID
@@ -414,12 +350,10 @@ def _get_rosa_pool() -> ProcessPoolExecutor:
         if need_create:
             ctx = mp.get_context("spawn")
 
-            # 1) 读取并行度参数
             oversub = max(1.0, _env_float("ROSA_POOL_OVERSUB", 1.0))
             hard_max = _env_int("ROSA_POOL_MAX_WORKERS", 0)
             req_max  = _env_int("ROSA_CPU_WORKERS", ROSA_CPU_WORKERS)
 
-            # 2) 基于每 rank CPU 配额的可控放大
             logical_cap = int(max(1, _PER_RANK_CPUS * oversub))
             if hard_max > 0:
                 logical_cap = min(logical_cap, hard_max)
@@ -429,7 +363,7 @@ def _get_rosa_pool() -> ProcessPoolExecutor:
             _ROSA_POOL = ProcessPoolExecutor(
                 max_workers=max_workers,
                 mp_context=ctx,
-                initializer=_rosa_worker_init,   # 仍然在子进程里禁用 OMP/MKL 线程
+                initializer=_rosa_worker_init,
             )
             _ROSA_POOL_PID = cur_pid
     return _ROSA_POOL
@@ -447,11 +381,6 @@ def _shutdown_rosa_pool():
             _ROSA_POOL = None
 
 def _rosa_worker_batch_btm_sam_exact(z_btm_np: "_np.ndarray", K: int) -> "_np.ndarray":
-    """
-    整批 ROSA 查询（折叠串 + 最长且最近），一次性处理 [B,T,M]。
-    入:  z_btm_np [B,T,M] int32
-    出:  y_btm_np [B,T,M] int32 （-1 或 0..K-1）
-    """
     B, T, M = z_btm_np.shape
     y_btm = _np.empty((B, T, M), dtype=_np.int32)
     for b in range(B):
@@ -460,18 +389,12 @@ def _rosa_worker_batch_btm_sam_exact(z_btm_np: "_np.ndarray", K: int) -> "_np.nd
 
 
 
-# -------------------------
-# 工具：RLE 计数（折叠后长度）
-# -------------------------
 def _count_runs(z):
     if not z:
         return 0
     arr = _np.asarray(z, dtype=_np.int32)
     return int(1 + _np.count_nonzero(arr[1:] != arr[:-1]))
 
-# -------------------------
-# Numba 核心（可并行）
-# -------------------------
 if _NUMBA_OK:
     @(_nb.njit(cache=True, fastmath=False))
     def _count_runs_nb(arr):
@@ -493,14 +416,12 @@ if _NUMBA_OK:
         length[s] = L
         link[s]   = -1
         e[s]      = -1
-        # next[s,:] 初始化为 -1
         for j in range(next_arr.shape[1]):
             next_arr[s, j] = -1
         return s
 
     @(_nb.njit(cache=True, fastmath=False))
     def _sam_extend(next_arr, link, length, e, last_arr, size, x, pos):
-        """标准 SAM extend，随后沿 suffix-link 回填 e[v]=pos；last_arr[0] 更新为 cur。"""
         last = last_arr[0]
         cur = _sam_new_state(next_arr, link, length, e, size, length[last] + 1)
         p = last
@@ -518,7 +439,6 @@ if _NUMBA_OK:
                 link[cur] = q
             else:
                 clone = _sam_new_state(next_arr, link, length, e, size, length[p] + 1)
-                # 复制转移
                 for j in range(K):
                     next_arr[clone, j] = next_arr[q, j]
                 link[clone] = link[q]
@@ -529,7 +449,6 @@ if _NUMBA_OK:
                 link[q]   = clone
                 link[cur] = clone
 
-        # 回填最近右端位
         v = cur
         while v != -1 and e[v] != pos:
             e[v] = pos
@@ -548,23 +467,17 @@ if _NUMBA_OK:
 
     @(_nb.njit(cache=True, fastmath=False))
     def _rosa_seq_folded_nb(z, K):
-        """
-        单路：折叠串 + SAM（最长且最近）。查询阶段不改索引；仅在新 run 时 extend。
-        输入 z[int32,T], 输出 y[int32,T] ∈ {-1, 0..K-1}
-        """
         T = z.shape[0]
         y = _np.empty((T,), dtype=_np.int32)
         if T == 0:
             return y
 
-        # 预估状态上界：2R+5
         R = _count_runs_nb(z)
         S_cap = 2 * R + 5
         next_arr = _np.empty((S_cap, K), dtype=_np.int32)
         link     = _np.empty((S_cap,),   dtype=_np.int32)
         length   = _np.empty((S_cap,),   dtype=_np.int32)
         e        = _np.empty((S_cap,),   dtype=_np.int32)
-        # 初始化根
         for j in range(K):
             next_arr[0, j] = -1
         link[0]   = -1
@@ -575,14 +488,12 @@ if _NUMBA_OK:
         last_arr = _np.empty((1,), dtype=_np.int32)
         last_arr[0] = 0
 
-        # 折叠串缓冲区（最大长度 <= T）
         c = _np.empty((T,), dtype=_np.int32)
         c_len = 0
-        last_sym = -2147483647  # sentinel
+        last_sym = -2147483647
 
         for t in range(T):
             x = z[t]
-            # 查询阶段
             q = _sam_match_next(next_arr, link, last_arr[0], x)
             if q == -1:
                 y[t] = -1
@@ -590,12 +501,10 @@ if _NUMBA_OK:
                 rpos = e[q]
                 nxt  = rpos + 1
                 if 0 <= rpos and nxt < c_len:
-                    y[t] = c[nxt]  # 折叠串天然保证相邻不同
+                    y[t] = c[nxt]
                 else:
                     y[t] = -1
-            # 提交阶段：仅在新 run 时 extend
             if t == 0 or x != last_sym:
-                # push to folded c
                 c[c_len] = x
                 c_len += 1
                 _sam_extend(next_arr, link, length, e, last_arr, size, x, c_len - 1)
@@ -605,10 +514,6 @@ if _NUMBA_OK:
 
     @(_nb.njit(cache=True, fastmath=False))
     def _rosa_batch_btm_nb(z_btm, K):
-        """
-        批量 [B,T,M] → [B,T,M] 的 y（-1 或 0..K-1），每个 (b,m) 独立运行 _rosa_seq_folded_nb。
-        若开启 parallel=True，则对 b 维并行。
-        """
         B, T, M = z_btm.shape
         y_btm = _np.empty((B, T, M), dtype=_np.int32)
         if _PARALLEL:
@@ -623,18 +528,12 @@ if _NUMBA_OK:
 
     @(_nb.njit(cache=True, fastmath=False))
     def _lcg_index_level_seq_nb(z, K, cand_tm, pos_mask):
-        """
-        单路 Index‑LCG：在折叠索引视图内做“改一步”的查询，不改显式序列。
-        z[int32,T], cand_tm[int32,T,topk], pos_mask[bool,T]（可全 True）
-        返回 y_cf[int16,T,topk] ∈ {-2(跳过), -1, 0..K-1}
-        """
         T = z.shape[0]
         topk = cand_tm.shape[1]
         out = _np.empty((T, topk), dtype=_np.int16)
         if T == 0:
             return out
 
-        # 预建 SAM（同 _rosa_seq_folded_nb）
         R = _count_runs_nb(z)
         S_cap = 2 * R + 5
         next_arr = _np.empty((S_cap, K), dtype=_np.int32)
@@ -654,9 +553,8 @@ if _NUMBA_OK:
         for t in range(T):
             if not pos_mask[t]:
                 for j in range(topk):
-                    out[t, j] = -2  # 跳过
+                    out[t, j] = -2
             else:
-                # 对本步候选集，仅在索引上查询（不提交）
                 for j in range(topk):
                     k = cand_tm[t, j]
                     q = _sam_match_next(next_arr, link, last_arr[0], k)
@@ -668,7 +566,6 @@ if _NUMBA_OK:
                             out[t, j] = _np.int16(c[nxt])
                         else:
                             out[t, j] = -1
-            # 提交真实 z[t]（仅在新 run）
             x = z[t]
             if t == 0 or x != last_sym:
                 c[c_len] = x; c_len += 1
@@ -679,9 +576,6 @@ if _NUMBA_OK:
 
     @(_nb.njit(cache=True, fastmath=False))
     def _lcg_index_level_bmt_nb(z_btm, K, cand_bmtk, pos_mask_bt):
-        """
-        批量 Index‑LCG：z[B,T,M], cand[B,M,T,topk], mask[B,T] → y_cf[B,M,T,topk]
-        """
         B, T, M = z_btm.shape
         topk = cand_bmtk.shape[3]
         out = _np.empty((B, M, T, topk), dtype=_np.int16)
@@ -695,21 +589,15 @@ if _NUMBA_OK:
                     out[b, m] = _lcg_index_level_seq_nb(z_btm[b, :, m], K, cand_bmtk[b, m], pos_mask_bt[b])
         return out
 
-# -------------------------
-# 包装器：保持外部接口不变
-# -------------------------
 def _rosa_one_sequence_sam_cpu(z_seq, K: int):
-    """单条序列（Python API 保持不变）。"""
     if _NUMBA_OK:
         z = _np.asarray(z_seq, dtype=_np.int32)
         y = _rosa_seq_folded_nb(z, int(K))
         return [int(v) for v in y]
-    # --- 回退：Numpy 版（与你之前的等价） ---
     T = len(z_seq)
     if T == 0: return []
     R = _count_runs(z_seq)
     S_cap = max(4, 2 * R + 5)
-    # 复用你之前的 _SAMFoldedCPU 实现（若已删除，可保留你旧版 _SAMExactCPU）
     sam = _SAMFoldedCPU(max_states=S_cap, K=K)
     y = []
     last = None
@@ -722,13 +610,11 @@ def _rosa_one_sequence_sam_cpu(z_seq, K: int):
     return y
 
 def _rosa_worker_batch_sample_sam_exact(z_tm_np: "_np.ndarray", K: int) -> "_np.ndarray":
-    """保持签名：输入 [T,M] → 输出 [T,M]。"""
     if _NUMBA_OK:
         T, M = z_tm_np.shape
         z_btm = z_tm_np.reshape(1, T, M)
         y_btm = _rosa_batch_btm_nb(z_btm, int(K))
         return y_btm[0]
-    # 回退：逐路循环
     T, M = z_tm_np.shape
     y_tm = _np.empty((T, M), dtype=_np.int32)
     for m in range(M):
@@ -736,16 +622,11 @@ def _rosa_worker_batch_sample_sam_exact(z_tm_np: "_np.ndarray", K: int) -> "_np.
     return y_tm
 
 def _rosa_query_sam_exact(z_btm: torch.Tensor, K: int, impl: str = "sam_cpu", pool_getter=_get_rosa_pool) -> torch.Tensor:
-    """
-    z_btm: [B,T,M] int64/CPU|CUDA → y_btm: [B,T,M] int64（-1 或 0..K-1）
-    语义：折叠串 + SAM（最长且最近）；查询阶段不改索引；仅在新 run 时 extend。
-    """
     assert z_btm.ndim == 3
     B, T, M = z_btm.shape
     device = z_btm.device
 
     if impl != "sam_cpu":
-        # 兼容路径（慢），只用于调试
         ys = []
         for b in range(B):
             y_tm = torch.empty((T, M), dtype=torch.int64, device=device)
@@ -755,11 +636,8 @@ def _rosa_query_sam_exact(z_btm: torch.Tensor, K: int, impl: str = "sam_cpu", po
             ys.append(y_tm)
         return torch.stack(ys, dim=0)
 
-    # --- CPU 并行 / Numba 路径 ---
-    # 原来出错：z_btm.detach().to(torch.int32).cpu().numpy(order="C")
-    z_np = to_c_np(z_btm, dtype=_np.int32)  # [B,T,M] C-contiguous
+    z_np = to_c_np(z_btm, dtype=_np.int32)
 
-    # 如果你使用了 Numba 版，这里可以走 Numba 内核；否则回退进程池
     if '_rosa_batch_btm_nb' in globals() and _NUMBA_OK:
         y_np = _rosa_batch_btm_nb(z_np, int(K))
         return torch.from_numpy(y_np).to(device=device, dtype=torch.int64, non_blocking=True)
@@ -771,9 +649,6 @@ def _rosa_query_sam_exact(z_btm: torch.Tensor, K: int, impl: str = "sam_cpu", po
 
 
 def _lcg_route_worker_index_level_sam(args):
-    """
-    单路 Index‑LCG 反事实（保持签名不变）：返回 [T][topk] 候选的新 y_t(k)。
-    """
     (T, K, z_seq, cand_lists, pos_mask) = args
     if _NUMBA_OK:
         z = _np.asarray(z_seq, dtype=_np.int32)
@@ -787,15 +662,13 @@ def _lcg_route_worker_index_level_sam(args):
             mask = _np.ones((T,), dtype=_np.bool_)
         else:
             mask = _np.asarray(pos_mask, dtype=_np.bool_)
-        ycf = _lcg_index_level_seq_nb(z, int(K), cand, mask)   # int16[T,topk]
-        # 还原成 List[List[int]]，保持之前接口
+        ycf = _lcg_index_level_seq_nb(z, int(K), cand, mask)
         out = []
         for i in range(T):
             row = [_np.int32(ycf[i, j]).item() for j in range(cand.shape[1])]
             out.append(row)
         return out
 
-    # --- 回退：原 Numpy 实现（可用你之前的版本） ---
     R = _count_runs(z_seq)
     S_cap = max(4, 2 * R + 5)
     sam = _SAMFoldedCPU(max_states=S_cap, K=K)
@@ -818,17 +691,6 @@ def _lcg_route_worker_index_level_sam(args):
     return y_cf_lists
 
 def _lcg_worker_index_level_sam_btm(args):
-    """
-    批量 Index‑LCG：保持签名不变；优先用 Numba 内核。
-    入:
-      - T: int
-      - K: int
-      - z_btm_np: [B,T,M] int32
-      - cand_bmtk_np: [B,M,T,topk] int32
-      - pos_mask_bt: Optional [B,T] bool
-    出:
-      - y_cf_bmtk: [B,M,T,topk] int16 ∈ {-2, -1, 0..K-1}
-    """
     (T, K, z_btm_np, cand_bmtk_np, pos_mask_bt) = args
     if _NUMBA_OK:
         if pos_mask_bt is None:
@@ -837,7 +699,6 @@ def _lcg_worker_index_level_sam_btm(args):
             mask = pos_mask_bt.astype(_np.bool_)
         y_cf = _lcg_index_level_bmt_nb(z_btm_np, int(K), cand_bmtk_np, mask)
         return y_cf
-    # 回退：逐 (b,m) 循环
     B, _, M = z_btm_np.shape
     topk = cand_bmtk_np.shape[-1]
     y_cf = _np.empty((B, M, T, topk), dtype=_np.int16)
@@ -852,21 +713,17 @@ def _lcg_worker_index_level_sam_btm(args):
 
 
 
-# ======================================================
-# LCG：自定义 Autograd Function（把对 logits 的梯度“注入”，v 的梯度原路返回）
-# ======================================================
 class MultiRouteLCGFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx,
-                v_in: torch.Tensor,                 # [B,T,d]
-                logits_all: torch.Tensor,           # [B,T,M,K]
-                y_idx: torch.Tensor,                # [B,T,M]，0/命中+1
-                E_stack: torch.Tensor,              # [M,K+1,d] (detach)
-                z_host_pinned: torch.Tensor,        # [B,T,M] int32, CPU pinned
-                pos_mask_cpu: list | None):         # [B][T] 或 None
-        # 保存给 backward
+                v_in: torch.Tensor,
+                logits_all: torch.Tensor,
+                y_idx: torch.Tensor,
+                E_stack: torch.Tensor,
+                z_host_pinned: torch.Tensor,
+                pos_mask_cpu: list | None):
         ctx.save_for_backward(logits_all, y_idx, E_stack)
-        ctx.z_host_pinned = z_host_pinned           # pinned CPU tensor
+        ctx.z_host_pinned = z_host_pinned
         ctx.pos_mask_cpu = pos_mask_cpu
         return v_in
 
@@ -876,84 +733,67 @@ class MultiRouteLCGFunction(torch.autograd.Function):
         device = logits_all.device
         B, T, M, K = logits_all.shape
 
-        # ---- 1) 概率与 Top-k 候选（在 backward 内一次性计算） ----
         with torch.no_grad():
-            p_all = torch.softmax(logits_all.float(), dim=-1)               # [B,T,M,K]
-            p_all_bmtk = p_all.permute(0, 2, 1, 3).contiguous()             # [B,M,T,K]
+            p_all = torch.softmax(logits_all.float(), dim=-1)
+            p_all_bmtk = p_all.permute(0, 2, 1, 3).contiguous()
             topk = min(LCG_TOPK, K)
-            idx_topk_bmt = torch.topk(p_all_bmtk, k=topk, dim=-1).indices   # [B,M,T,topk]
+            idx_topk_bmt = torch.topk(p_all_bmtk, k=topk, dim=-1).indices
 
-        # ---- 2) 异步拷贝候选到 pinned CPU，并在后台线程里等待事件后跑 Numba LCG ----
         cand_host = torch.empty_like(idx_topk_bmt, device='cpu', pin_memory=True)
         cand_host.copy_(idx_topk_bmt, non_blocking=True)
         ev = torch.cuda.Event(); ev.record(torch.cuda.current_stream())
 
-        # 准备 z / mask 的 numpy 视图（均在 CPU）
-        z_btm_np = np.asarray(ctx.z_host_pinned, order="C")                  # [B,T,M] int32
+        z_btm_np = np.asarray(ctx.z_host_pinned, order="C")
 
-        # —— 关键修复：确保传给 Numba 的掩码不是 None，而是 2D bool 数组 [B,T] ——
         if ctx.pos_mask_cpu is None:
-            pos_mask_bt_np = np.ones((B, T), dtype=np.bool_)                 # 全 True
+            pos_mask_bt_np = np.ones((B, T), dtype=np.bool_)
         else:
-            # list[list[bool]] -> np.bool_ 的 C 连续数组
             pos_mask_bt_np = np.asarray(ctx.pos_mask_cpu, dtype=np.bool_, order="C")
-            # 兜底检查形状
             if pos_mask_bt_np.ndim != 2 or pos_mask_bt_np.shape != (B, T):
                 pos_mask_bt_np = np.ones((B, T), dtype=np.bool_)
 
         def _wait_and_lcg():
             _wait_event(ev)
-            cand_np = np.asarray(cand_host, order="C")                       # [B,M,T,topk] int32
+            cand_np = np.asarray(cand_host, order="C")
             if _NUMBA_OK and ('_lcg_index_level_bmt_nb' in globals()):
-                # 这里始终传 2D bool 掩码，避免 getitem(None, i) 的 TypingError
                 return _lcg_index_level_bmt_nb(z_btm_np, int(K), cand_np, pos_mask_bt_np)
             else:
-                # 回退实现也传非 None 掩码，接口一致
                 return _lcg_worker_index_level_sam_btm((T, int(K), z_btm_np, cand_np, pos_mask_bt_np))
 
         fut_cf = _ROSA_THREAD_POOL.submit(_wait_and_lcg)
 
-        # ---- 3) GPU 侧可提前计算的部分：S = g · E^T ----
         with torch.no_grad():
-            g_no_scale = grad_v.float()                                       # [B,T,d]
-            E_stack_f = E_stack.float()                                       # [M,K+1,d]
-            # S[b,m,t,k] = g[b,t,:] · E[m,k,:]
-            S = torch.einsum("btd,mkd->bmtk", g_no_scale, E_stack_f).to(device)  # [B,M,T,K+1]
+            g_no_scale = grad_v.float()
+            E_stack_f = E_stack.float()
+            S = torch.einsum("btd,mkd->bmtk", g_no_scale, E_stack_f).to(device)
 
-            # 旧 y 索引，扩到 topk 形状
-            y_old_bmt = y_idx.permute(0, 2, 1)                                     # [B,M,T] in [0..K]
-            y_old_exp = y_old_bmt.unsqueeze(-1).expand(-1, -1, -1, topk)           # [B,M,T,topk]
+            y_old_bmt = y_idx.permute(0, 2, 1)
+            y_old_exp = y_old_bmt.unsqueeze(-1).expand(-1, -1, -1, topk)
 
-        # ---- 4) 取回 LCG 反事实结果，组装 ΔL / 梯度 ----
-        y_cf_bmtk_np = fut_cf.result()                                         # [B,M,T,topk] int16 ∈ {-2,-1,0..K-1}
+        y_cf_bmtk_np = fut_cf.result()
         with torch.no_grad():
             y_cf_bmtk = torch.from_numpy(y_cf_bmtk_np).to(device=device, dtype=torch.long)
             skip_mask = (y_cf_bmtk == -2)
             pad_mask  = (y_cf_bmtk == -1)
-            idx_new   = torch.where(pad_mask, torch.zeros_like(y_cf_bmtk), y_cf_bmtk + 1)  # [B,M,T,topk] ∈ [0..K]
+            idx_new   = torch.where(pad_mask, torch.zeros_like(y_cf_bmtk), y_cf_bmtk + 1)
 
-            # ΔL = (g·E_new) - (g·E_old)；跳过位置置 0
-            S_new = torch.gather(S, dim=-1, index=idx_new)                          # [B,M,T,topk]
-            S_old = torch.gather(S, dim=-1, index=y_old_exp)                         # [B,M,T,topk]
+            S_new = torch.gather(S, dim=-1, index=idx_new)
+            S_old = torch.gather(S, dim=-1, index=y_old_exp)
             deltas = S_new - S_old
-            deltas = torch.where(skip_mask, torch.zeros_like(deltas), deltas)        # [B,M,T,topk]
+            deltas = torch.where(skip_mask, torch.zeros_like(deltas), deltas)
 
-            # 概率按 [B,M,T,topk] 对齐
-            probs_topk = torch.gather(p_all_bmtk, dim=-1, index=idx_topk_bmt)        # [B,M,T,topk]
+            probs_topk = torch.gather(p_all_bmtk, dim=-1, index=idx_topk_bmt)
 
-            # 对比式梯度（无温度）
-            mean_delta = (probs_topk * deltas).sum(dim=-1, keepdim=True)             # [B,M,T,1]
-            grad_topk  = probs_topk * (deltas - mean_delta)                           # [B,M,T,topk]
+            mean_delta = (probs_topk * deltas).sum(dim=-1, keepdim=True)
+            grad_topk  = probs_topk * (deltas - mean_delta)
 
-            # scatter_add 回到 logits_all 形状
-            grad_logits = torch.zeros_like(logits_all, dtype=p_all.dtype, device=device)     # [B,T,M,K]
+            grad_logits = torch.zeros_like(logits_all, dtype=p_all.dtype, device=device)
             grad_logits_flat = grad_logits.permute(0, 2, 1, 3).contiguous().view(B * M * T, K)
             idx_flat = idx_topk_bmt.contiguous().view(B * M * T, topk)
             src_flat = grad_topk.contiguous().view(B * M * T, topk)
             grad_logits_flat.scatter_add_(dim=1, index=idx_flat, src=src_flat)
             grad_logits = grad_logits_flat.view(B, M, T, K).permute(0, 2, 1, 3).to(logits_all.dtype)
 
-        # 返回各输入的梯度（v 的梯度原样通过；其余不需要梯度返回 None）
         return grad_v, grad_logits, None, None, None, None
 
 
@@ -961,9 +801,6 @@ class MultiRouteLCGFunction(torch.autograd.Function):
 
 
 
-# ======================================================
-# Qwen3 打补丁：添加多路 ROSA + LCG
-# ======================================================
 import os
 import torch
 import torch.nn as nn
@@ -981,15 +818,14 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
     M = int(ROSA_NUM_ROUTES)
     K = int(ROSA_VOCAB_SIZE)
 
-    query_impl_env = os.environ.get("ROSA_QUERY_IMPL", "sam_cpu").lower()  # 'sam_cpu' | 'sam_gpu'
-    lcg_enable = os.environ.get("LCG_ENABLE", "0") in ("1", "true", "True")
+    query_impl_env = os.environ.get("ROSA_QUERY_IMPL", "").lower()
+    lcg_enable = os.environ.get("LCG_ENABLE", "") in ("1", "true", "True")
 
 
     for li, layer in enumerate(model.model.layers):
         if li == 0:
-            continue  # 第 0 层保留全局注意力
+            continue
 
-        # M 路 logits 头 + M 路 Embedding（E[0]=0）
         layer.rosa_wlm_list = nn.ModuleList(
             [nn.Linear(hidden_size, K, bias=False).to(dtype=base_dtype, device=base_device) for _ in range(M)]
         )
@@ -1017,27 +853,25 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
                                         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
                                         **kwargs):
             residual = hidden_states
-            u = self.input_layernorm(hidden_states)  # [B,T,H]
+            u = self.input_layernorm(hidden_states)
             B, T, H = u.shape
             M = self.rosa_num_routes
             K = self.rosa_vocab_size
 
-            # ===== 1) 各路 logits & z（dtype 保持一致，避免无谓 cast）=====
             logits_list, z_list_gpu = [], []
             for head in self.rosa_wlm_list:
                 if u.dtype is not head.weight.dtype:
                     logits_m = F.linear(u.to(head.weight.dtype), head.weight, None).to(u.dtype)
                 else:
-                    logits_m = F.linear(u, head.weight, None)  # [B,T,K]
+                    logits_m = F.linear(u, head.weight, None)
                 logits_list.append(logits_m)
-                z_list_gpu.append(torch.argmax(logits_m, dim=-1))  # [B,T]
-            logits_all = torch.stack(logits_list, dim=2)  # [B,T,M,K]
-            z_gpu = torch.stack(z_list_gpu, dim=2)        # [B,T,M]
+                z_list_gpu.append(torch.argmax(logits_m, dim=-1))
+            logits_all = torch.stack(logits_list, dim=2)
+            z_gpu = torch.stack(z_list_gpu, dim=2)
 
-            # ===== 2) 异步：z -> pinned CPU，并在线程里等事件后跑 ROSA =====
             nvtx.range_push("ROSA_async_copy_and_run")
             z_i32 = z_gpu.to(torch.int32)
-            z_host = torch.empty_like(z_i32, device='cpu', pin_memory=True)  # pinned
+            z_host = torch.empty_like(z_i32, device='cpu', pin_memory=True)
             z_host.copy_(z_i32, non_blocking=True)
             ev = torch.cuda.Event(); ev.record(torch.cuda.current_stream())
 
@@ -1045,13 +879,12 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
                 _wait_event(ev)
                 z_np = np.asarray(z_host, order="C")
                 if _NUMBA_OK and ('_rosa_batch_btm_nb' in globals()):
-                    return _rosa_batch_btm_nb(z_np, int(K))               # [B,T,M] int32 in {-1,0..K-1}
+                    return _rosa_batch_btm_nb(z_np, int(K))
                 else:
-                    return _rosa_worker_batch_btm_sam_exact(z_np, int(K)) # 兼容回退
+                    return _rosa_worker_batch_btm_sam_exact(z_np, int(K))
             fut_y = _ROSA_THREAD_POOL.submit(_wait_and_rosa)
             nvtx.range_pop()
 
-            # ===== 3) 与 ROSA 并行：窗口注意力 =====
             nvtx.range_push("attn")
             attn_out, _ = self.self_attn(
                 hidden_states=u, attention_mask=attention_mask,
@@ -1061,32 +894,28 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
             )
             nvtx.range_pop()
 
-            # ===== 4) 取回 y，并查表平均注入 =====
             nvtx.range_push("ROSA_gather_embed")
-            y_np  = fut_y.result()  # [B,T,M] int32
+            y_np  = fut_y.result()
             y_btm = torch.from_numpy(y_np).to(device=u.device, dtype=torch.long, non_blocking=True)
-            y_idx = torch.where(y_btm >= 0, y_btm + 1, torch.zeros_like(y_btm))  # 0=pad，>0=命中+1
+            y_idx = torch.where(y_btm >= 0, y_btm + 1, torch.zeros_like(y_btm))
 
             e_sum = 0
             E_stack_gpu = []
             for m, emb in enumerate(self.rosa_emb_list):
-                e_m = F.embedding(y_idx[:, :, m], emb.weight)  # [B,T,d]
+                e_m = F.embedding(y_idx[:, :, m], emb.weight)
                 e_sum = e_sum + e_m
                 E_stack_gpu.append(emb.weight.detach())
             v = (e_sum / float(M)).to(u.dtype)
-            E_stack_gpu = torch.stack(E_stack_gpu, dim=0)      # [M,K+1,d]
+            E_stack_gpu = torch.stack(E_stack_gpu, dim=0)
             nvtx.range_pop()
 
-            # ===== 5) 可选 LCG（保持逻辑；topk 挪到 backward）=====
-            if os.environ.get("LCG_ENABLE", "0") in ("1", "true", "True"):
+            if os.environ.get("LCG_ENABLE", "") in ("1", "true", "True"):
                 pos_mask_cpu = None
                 if LCG_POS_SUBSAMPLE < 1.0:
                     mask = (torch.rand((B, T), device=logits_all.device) < LCG_POS_SUBSAMPLE)
                     pos_mask_cpu = mask.cpu().tolist()
-                # 把 pinned 的 z_host 直接传入 Autograd ctx（供 backward 的 LCG 使用）
                 v = MultiRouteLCGFunction.apply(v, logits_all, y_idx, E_stack_gpu, z_host, pos_mask_cpu)
 
-            # ===== 6) 残差 & MLP（不变）=====
             hidden_states = residual + attn_out + v
             residual = hidden_states
             hidden_states = self.post_attention_layernorm(hidden_states)
@@ -1099,7 +928,6 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
 
 
 
-    # 元信息保存（方便检查）
     meta = {
         "apply_layers_from": 1,
         "num_routes_per_layer": ROSA_NUM_ROUTES,
@@ -1109,22 +937,19 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
 
-# ======================================================
-# 构建模型
-# ======================================================
 def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
     config = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
     config.sliding_window = ATTN_WINDOW
-    config.max_window_layers = FIRST_GLOBAL_LAYERS  # 前若干层使用 full attention
+    config.max_window_layers = FIRST_GLOBAL_LAYERS
     if (not hasattr(config, "layer_types")) or (config.layer_types is None):
         config.layer_types = [
             "full_attention" if i < config.max_window_layers else "sliding_attention"
             for i in range(config.num_hidden_layers)
         ]
     if hasattr(config, "attn_implementation"):
-        config.attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+        config.attn_implementation = "" if USE_FLASH_ATTN else ""
     else:
-        config._attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+        config._attn_implementation = "" if USE_FLASH_ATTN else ""
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_DIR, use_fast=True)
     model = Qwen3ForCausalLM.from_pretrained(
@@ -1145,9 +970,6 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
     return model, tokenizer
 
 
-# ======================================================
-# 仅保存新增参数（多路）
-# ======================================================
 def save_rosa_only(model: Qwen3ForCausalLM, out_dir: str):
     state = {}
     for i, layer in enumerate(model.model.layers):
@@ -1159,12 +981,9 @@ def save_rosa_only(model: Qwen3ForCausalLM, out_dir: str):
                 state[f"model.layers.{i}.rosa_emb_list.{m}.weight"] = emb.weight.detach().cpu()
     path = os.path.join(out_dir, SAVE_STATE_DICT_NAME)
     torch.save(state, path)
-    print(f"[save] saved ROSA-only params to: {path}")
+    print(f"saved params to: {path}")
 
 
-# ======================================================
-# 优化器 param groups
-# ======================================================
 def build_optimizer_params(model):
     wlm_params, emb_params, backbone_params = [], [], []
     for n, p in model.named_parameters():
@@ -1199,16 +1018,12 @@ def build_optimizer_params(model):
     return param_groups
 
 
-# ======================================================
-# 回调：确保 E[0]=0
-# ======================================================
 from transformers.trainer_callback import TrainerCallback
 
 def is_main_process() -> bool:
     return _env_int("RANK", 0) == 0
 
 class RosaZeroRowCallback(TrainerCallback):
-    """确保每层每路 E[0] 始终为零"""
     def on_init_end(self, args, state, control, model=None, **kwargs):
         if model is not None:
             with torch.no_grad():
@@ -1228,16 +1043,13 @@ class RosaZeroRowCallback(TrainerCallback):
         return control
 
 
-# ======================================================
-# 训练主逻辑
-# ======================================================
 def main():
     set_seed(SEED)
 
     raw = load_from_disk(DATASET_DIR)
     train_ds = raw["train"]
     test_ds = raw.get("test", raw["validation"] if "validation" in raw else None)
-    assert test_ds is not None, "需要存在 test 或 validation split"
+    assert test_ds is not None
 
     model, tokenizer = build_model_and_tokenizer()
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
@@ -1283,7 +1095,7 @@ def main():
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"总参数:        {total_params:,}")
+    print(f"total params: {total_params:,}")
 
     trainer.train()
     metrics = trainer.evaluate()
@@ -1308,11 +1120,11 @@ def main():
     }
 
     if is_main_process():
-        print("[eval] metrics:", metrics)
+        print("metrics:", metrics)
         save_rosa_only(model, OUTPUT_DIR)
         with open(os.path.join(OUTPUT_DIR, "run_meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
-        print(f"[done] meta saved at {os.path.join(OUTPUT_DIR, 'run_meta.json')}")
+        print(f"meta saved at {os.path.join(OUTPUT_DIR, 'run_meta.json')}")
 
 
 if __name__ == "__main__":

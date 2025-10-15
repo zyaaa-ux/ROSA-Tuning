@@ -99,15 +99,15 @@ $$
 # Update · 2025-10-15
 
 - **LCG moved to embedding level** — gradients are computed on the injected embedding branch \(v^{(\ell)}\) instead of token-level edits.  
-- **~10× faster** — event-gated CPU/GPU overlap, pinned memory, vectorized top-k, Numba kernels.  
+- **10× faster** — event-gated CPU/GPU overlap, pinned memory, vectorized top-k, Numba kernels.  
 - **ROSA fix** — strict *retrieve-then-commit* SAM with rightmost tracking ensures **longest and latest** matches.
 
 
 ## Formulas
 
-\[
+$$
 \begin{aligned}
-&\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}\,u^{(\ell)}, \qquad
+&\mathbf{logits}^{(\ell,m)} = W_{\mathrm{lm}}^{(\ell,m)}\,u^{(\ell)}, \qquad
 z^{(\ell,m)}=\arg\max \mathbf{logits}^{(\ell,m)}, \qquad
 y^{(\ell,m)}=\mathrm{ROSA}_{\mathrm{collapse}}\!\big(z^{(\ell,m)}\big) \\[4pt]
 &v^{(\ell)}=\frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}\!\big[y^{(\ell,m)}+1\big], \qquad
@@ -122,24 +122,24 @@ S^{(\ell,m)}_{t,\,\hat y(i\leftarrow c)+1}-S^{(\ell,m)}_{t,\,\hat y+1}
 \Delta L^{(\ell,m)}_{i}(c)
 -\sum_{k} p^{(\ell,m)}_{i,k}\,\Delta L^{(\ell,m)}_{i}(k)
 \right) \\[6pt]
-&\frac{\partial\mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}}
+&\frac{\partial\mathcal{L}}{\partial W_{\mathrm{lm}}^{(\ell,m)}}
 = \big(u^{(\ell)}\big)^\top
 \frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \qquad
 \frac{\partial\mathcal{L}}{\partial E^{(\ell,m)}[r]}
 = \frac{1}{M}\sum_{t}\mathbf{1}\{\hat y^{(\ell,m)}_t=r\}\,g^{(\ell)}_t
 \end{aligned}
-\]
+$$
 
-\[
+$$
 \mathcal{C}(1,1,1,2,2,3)=(1,2,3), \qquad
 y_t=\operatorname{nextdiff}\!\left(\operatorname{SAM}\!\big(\mathcal{C}(z_{<t})\big)\right)
-\]
+$$
 
-\[
+$$
 h^{(\ell+1)} = h^{(\ell)}
 + \operatorname{Attn}^{(\ell)}_{\mathrm{win}}\!\big(\mathrm{LN}(h^{(\ell)})\big)
 + v^{(\ell)} + \mathrm{MLP}^{(\ell)}\!\big(\mathrm{LN}(\cdot)\big)
-\]
+$$
 ---
 
 ### Run-Length Collapse in Index View

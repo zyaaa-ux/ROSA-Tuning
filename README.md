@@ -15,8 +15,8 @@
 ### Setup
 
 - **Base model:** Qwen3-0.6B with global attention or windowed attention  
-- **Training:** 28,000 samples, 1 epoch, original model frozen, only ROSA adapters trained  
-- **Evaluation:** PG-19 dataset, sequence length 16k, window size 1024  
+- **Training:** 28,000 samples, 1 epoch on PG-19(train), original model frozen, only ROSA adapters trained  
+- **Evaluation:** PG-19(test), sequence length 16k, window size 1024  
 
 ### Perplexity (PPL) Comparison On Validation Datasets
 

@@ -106,46 +106,40 @@ $$
 ## Formulas
 
 \[
-\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}\,u^{(\ell)},\quad
-z^{(\ell,m)}=\arg\max(\mathbf{logits}^{(\ell,m)}),\quad
-y^{(\ell,m)}=\mathrm{ROSA}_{\text{collapse}}(z^{(\ell,m)}),
+\begin{aligned}
+&\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}\,u^{(\ell)}, \qquad
+z^{(\ell,m)}=\arg\max \mathbf{logits}^{(\ell,m)}, \qquad
+y^{(\ell,m)}=\mathrm{ROSA}_{\mathrm{collapse}}\!\big(z^{(\ell,m)}\big) \\[4pt]
+&v^{(\ell)}=\frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}\!\big[y^{(\ell,m)}+1\big], \qquad
+g^{(\ell)}=\frac{\partial\mathcal{L}}{\partial v^{(\ell)}} \\[6pt]
+&S^{(\ell,m)}_{t,k}=\big(g^{(\ell)}_t\big)^\top E^{(\ell,m)}[k], \qquad
+\Delta L^{(\ell,m)}_{i}(c)=
+\sum_{t\in S^{(\ell,m)}_{i}(c)} \!\Big(
+S^{(\ell,m)}_{t,\,\hat y(i\leftarrow c)+1}-S^{(\ell,m)}_{t,\,\hat y+1}
+\Big) \\[6pt]
+&\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}_{i,c}}
+= p^{(\ell,m)}_{i,c}\!\left(
+\Delta L^{(\ell,m)}_{i}(c)
+-\sum_{k} p^{(\ell,m)}_{i,k}\,\Delta L^{(\ell,m)}_{i}(k)
+\right) \\[6pt]
+&\frac{\partial\mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}}
+= \big(u^{(\ell)}\big)^\top
+\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \qquad
+\frac{\partial\mathcal{L}}{\partial E^{(\ell,m)}[r]}
+= \frac{1}{M}\sum_{t}\mathbf{1}\{\hat y^{(\ell,m)}_t=r\}\,g^{(\ell)}_t
+\end{aligned}
 \]
 
 \[
-v^{(\ell)}=\frac{1}{M}\sum_{m=1}^M E^{(\ell,m)}[y^{(\ell,m)}+1],
-\quad
-g^{(\ell)}=\frac{\partial\mathcal{L}}{\partial v^{(\ell)}}.
+\mathcal{C}(1,1,1,2,2,3)=(1,2,3), \qquad
+y_t=\operatorname{nextdiff}\!\left(\operatorname{SAM}\!\big(\mathcal{C}(z_{<t})\big)\right)
 \]
 
 \[
-S^{(\ell,m)}_{t,k}=(g^{(\ell)}_t)^\top E^{(\ell,m)}[k],
-\quad
-\Delta L_i^{(\ell,m)}(c)=\sum_{t\in S_i^{(\ell,m)}(c)}(S_{t,\hat y(i\!\leftarrow\!c)}-S_{t,\hat y}),
+h^{(\ell+1)} = h^{(\ell)}
++ \operatorname{Attn}^{(\ell)}_{\mathrm{win}}\!\big(\mathrm{LN}(h^{(\ell)})\big)
++ v^{(\ell)} + \mathrm{MLP}^{(\ell)}\!\big(\mathrm{LN}(\cdot)\big)
 \]
-
-\[
-\frac{\partial\mathcal{L}}{\partial\mathbf{logits}^{(\ell,m)}_{i,c}}
-=p_{i,c}^{(\ell,m)}\!\left(\Delta L_i^{(\ell,m)}(c)-\sum_k p_{i,k}^{(\ell,m)}\Delta L_i^{(\ell,m)}(k)\right),
-\]
-
-\[
-\frac{\partial\mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}}=(u^{(\ell)})^\top\!\frac{\partial\mathcal{L}}{\partial\mathbf{logits}^{(\ell,m)}},
-\quad
-\frac{\partial\mathcal{L}}{\partial E^{(\ell,m)}[r]}=\frac{1}{M}\!\sum_t\!\mathbf{1}\{\hat y_t^{(\ell,m)}=r\}g_t^{(\ell)}.
-\]
-
-
-
-\[
-\mathcal{C}(1,1,1,2,2,3)=(1,2,3),
-\quad
-y_t=\text{nextdiff}(\text{SAM}(\mathcal{C}(z_{<t}))),
-\]
-
-\[
-h^{(\ell+1)}=h^{(\ell)}+\mathrm{Attn}_{\text{win}}^{(\ell)}+\!v^{(\ell)}+\mathrm{MLP}^{(\ell)}.
-\]
-
 ---
 
 ### Run-Length Collapse in Index View

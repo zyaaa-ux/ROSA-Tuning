@@ -1,4 +1,4 @@
-# ROSA-Tuning: Tuning Global Attention into Better Window Attention
+  # ROSA-Tuning: Tuning Global Attention into Better Window Attention
 
 ## TL;DR
 
@@ -97,7 +97,6 @@ $$
 ---
 
 ## Update · 2025-10-15
-
 - **LCG moved to embedding level** — gradients are computed on the injected embedding branch $v^{(\ell)}$ instead of token-level edits.  
 - **10× faster** — event-gated CPU/GPU overlap, pinned memory, vectorized top-k, Numba kernels.  
 - **ROSA fix** — strict *retrieve-then-commit* SAM with rightmost tracking ensures **longest and latest** matches.
@@ -105,63 +104,44 @@ $$
 ### Formulas
 
 $$
-\begin{aligned}
-&\mathbf{logits}^{(\ell,m)} = W_{\text{lm}}^{(\ell,m)} u^{(\ell)}, \qquad
-z^{(\ell,m)}=\arg\max \mathbf{logits}^{(\ell,m)}, \qquad
-y^{(\ell,m)}=\text{ROSA}_{\text{collapse}}(z^{(\ell,m)}) \\[4pt]
-&v^{(\ell)}=\frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}[y^{(\ell,m)}+1], \qquad
-g^{(\ell)}=\frac{\partial\mathcal{L}}{\partial v^{(\ell)}} \\[6pt]
-&S^{(\ell,m)}_{t,k}=(g^{(\ell)}_t)^{\top} E^{(\ell,m)}[k], \qquad
+\mathbf{logits}^{(\ell,m)} = W_{\mathrm{lm}}^{(\ell,m)}\,u^{(\ell)}, \quad
+z^{(\ell,m)}=\arg\max \mathbf{logits}^{(\ell,m)}, \quad
+y^{(\ell,m)}=\mathrm{ROSA}_{\mathrm{collapse}}(z^{(\ell,m)})
+$$
+
+$$
+v^{(\ell)}=\frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}[y^{(\ell,m)}+1], \quad
+g^{(\ell)}=\frac{\partial\mathcal{L}}{\partial v^{(\ell)}}
+$$
+
+$$
+S^{(\ell,m)}_{t,k}=(g^{(\ell)}_t)^\top E^{(\ell,m)}[k], \quad
 \Delta L^{(\ell,m)}_{i}(c)=
 \sum_{t\in S^{(\ell,m)}_{i}(c)} \left(
-S^{(\ell,m)}_{t, \hat{y}(i\leftarrow c)+1}-S^{(\ell,m)}_{t, \hat{y}+1}
-\right) \\[6pt]
-&\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}_{i,c}}
+S^{(\ell,m)}_{t,\,\hat{y}(i\leftarrow c)+1}-S^{(\ell,m)}_{t,\,\hat{y}+1}
+\right)
+$$
+
+$$
+\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}_{i,c}}
 = p^{(\ell,m)}_{i,c}\left(
 \Delta L^{(\ell,m)}_{i}(c)
--\sum_{k} p^{(\ell,m)}_{i,k} \Delta L^{(\ell,m)}_{i}(k)
-\right) \\[6pt]
-&\frac{\partial\mathcal{L}}{\partial W_{\text{lm}}^{(\ell,m)}}
-= (u^{(\ell)})^{\top}
-\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \qquad
+-\sum_{k} p^{(\ell,m)}_{i,k}\,\Delta L^{(\ell,m)}_{i}(k)
+\right)
+$$
+
+$$
+\frac{\partial\mathcal{L}}{\partial W_{\mathrm{lm}}^{(\ell,m)}}
+= (u^{(\ell)})^\top
+\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \quad
 \frac{\partial\mathcal{L}}{\partial E^{(\ell,m)}[r]}
-= \frac{1}{M}\sum_{t}\mathbb{1}\{\hat{y}^{(\ell,m)}_t=r\} g^{(\ell)}_t
-\end{aligned}
+= \frac{1}{M}\sum_{t}\mathbb{1}\{\hat{y}^{(\ell,m)}_t=r\}\,g^{(\ell)}_t
 $$
 
 $$
-\mathcal{C}(1,1,1,2,2,3)=(1,2,3), \qquad
-y_t=\text{nextdiff}(\text{SAM}(\mathcal{C}(z_{<t})))
+\mathcal{C}(1,1,1,2,2,3)=(1,2,3), \quad
+y_t=\mathrm{nextdiff}(\mathrm{SAM}(\mathcal{C}(z_{<t>})))
 $$
-
-$$
-h^{(\ell+1)} = h^{(\ell)}
-+ \text{Attn}^{(\ell)}_{\text{win}}(\text{LN}(h^{(\ell)}))
-+ v^{(\ell)} + \text{MLP}^{(\ell)}(\text{LN}(\cdot))
-$$
-
----
-
-### Run-Length Collapse in Index View
-
-For historical discrete sequence $z_{<t}$, apply run-length collapse only in ROSA's index view:
-
-$$
-\mathcal{C}(1,1,1,2,2,3) = (1,2,3)
-$$
-
-Maintain an online **Suffix Automaton (SAM)** on the collapsed string $\mathcal{C}(z_{<t})$.  
-During query, find the longest and most recent historical match ending with the current suffix, and output its next different token as $y_t$.
-
-**Retrieve-then-commit:**  
-At step *t*, first retrieve $y_t$ from the collapsed index, then write $z_t$ to the index using collapse policy.
-
----
-
-### CPU/GPU Parallelism
-
-- **GPU:** Windowed attention + $W_{lm}$ projection + softmax + embedding/residual  
-- **CPU:** Parameter-free ROSA (SAM construction and matching) operates on integer sequences  
 
 ---
 

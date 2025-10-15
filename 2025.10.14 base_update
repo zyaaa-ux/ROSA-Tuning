@@ -1,5 +1,3 @@
-The code have some bugs. I’ll fix it as soon as I wake up. It doesn’t affect the conclusions on the README interface.
-
 import os
 import math
 import json

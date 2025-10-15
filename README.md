@@ -24,8 +24,9 @@
 |:------|----:|
 | Global Attention | 31.96 |
 | Windowed Attention | 465.59 |
-| Windowed Attention + ROSA (2025.10.13) | **25.96** |
-| Windowed Attention + ROSA (2025.10.14) | **20.01** |
+| Windowed Attention + ROSA (2025.10.13) | 25.96 |
+| Windowed Attention + ROSA (2025.10.14) | 20.01 |
+| Windowed Attention + ROSA (2025.10.15) | 19.93 |
 
 ROSA enables windowed attention to outperform the global attention baseline.
 
@@ -63,29 +64,7 @@ $$
 - Removed all temperature and scaling factors; fully hard forward path.  
 - Replaced STE with **Local Counterfactual Gradient (LCG)**; CPU computes $\Delta L_i(k)$ by "change-one-token" simulation and writes position-wise contrastive gradients to logits.  
 
-### Layer $\ell \ge 1$ (window attention + multi-route ROSA)
 
-$$
-u^{(\ell)} = \mathrm{LN}_1(h^{(\ell)}), \quad a^{(\ell)} = \mathrm{Attn}^{(\ell)}_{\mathrm{win}}(u^{(\ell)}).
-$$
-
-$$
-\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}u^{(\ell)}, \quad p^{(\ell,m)} = \mathrm{softmax}(\mathbf{logits}^{(\ell,m)}), \quad z^{(\ell,m)} = \arg\max(\mathbf{logits}^{(\ell,m)}).
-$$
-
-### Index-view RLE and ROSA Retrieval
-
-$$
-c^{(\ell,m)}_{<t} = \mathcal{C}(z^{(\ell,m)}_{<t}), \quad \mathcal{C}(1,1,1,2,2,3) = (1,2,3).
-$$
-
-$$
-y^{(\ell,m)}_t = \begin{cases} c^{(\ell,m)}_{j_{\text{last}}(z^{(\ell,m)}_t)+1}, & j_{\text{last}}(z^{(\ell,m)}_t)+1 < |c^{(\ell,m)}_{<t}|,\\ -1, & \text{otherwise}. \end{cases}
-$$
-
-$$
-\hat y^{(\ell,m)}_t = y^{(\ell,m)}_t + 1, \quad E^{(\ell,m)}[0] = 0.
-$$
 
 ### Multi-route Injection and Output
 
@@ -114,6 +93,58 @@ $$
 $$
 \frac{\partial \mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}} = (u^{(\ell)})^\top \frac{\partial \mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \quad \frac{\partial \mathcal{L}}{\partial E^{(\ell,m)}[r]} = \frac{1}{M} \sum_t \mathbf{1}\{\hat y^{(\ell,m)}_t = r\} g^{(\ell)}_t.
 $$
+
+---
+
+# Update · 2025-10-15
+
+- **LCG moved to embedding level** — gradients are computed on the injected embedding branch \(v^{(\ell)}\) instead of token-level edits.  
+- **~10× faster** — event-gated CPU/GPU overlap, pinned memory, vectorized top-k, Numba kernels.  
+- **ROSA fix** — strict *retrieve-then-commit* SAM with rightmost tracking ensures **longest and latest** matches.
+
+
+## Formulas
+
+\[
+\mathbf{logits}^{(\ell,m)} = W_{\rm lm}^{(\ell,m)}\,u^{(\ell)},\quad
+z^{(\ell,m)}=\arg\max(\mathbf{logits}^{(\ell,m)}),\quad
+y^{(\ell,m)}=\mathrm{ROSA}_{\text{collapse}}(z^{(\ell,m)}),
+\]
+
+\[
+v^{(\ell)}=\frac{1}{M}\sum_{m=1}^M E^{(\ell,m)}[y^{(\ell,m)}+1],
+\quad
+g^{(\ell)}=\frac{\partial\mathcal{L}}{\partial v^{(\ell)}}.
+\]
+
+\[
+S^{(\ell,m)}_{t,k}=(g^{(\ell)}_t)^\top E^{(\ell,m)}[k],
+\quad
+\Delta L_i^{(\ell,m)}(c)=\sum_{t\in S_i^{(\ell,m)}(c)}(S_{t,\hat y(i\!\leftarrow\!c)}-S_{t,\hat y}),
+\]
+
+\[
+\frac{\partial\mathcal{L}}{\partial\mathbf{logits}^{(\ell,m)}_{i,c}}
+=p_{i,c}^{(\ell,m)}\!\left(\Delta L_i^{(\ell,m)}(c)-\sum_k p_{i,k}^{(\ell,m)}\Delta L_i^{(\ell,m)}(k)\right),
+\]
+
+\[
+\frac{\partial\mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}}=(u^{(\ell)})^\top\!\frac{\partial\mathcal{L}}{\partial\mathbf{logits}^{(\ell,m)}},
+\quad
+\frac{\partial\mathcal{L}}{\partial E^{(\ell,m)}[r]}=\frac{1}{M}\!\sum_t\!\mathbf{1}\{\hat y_t^{(\ell,m)}=r\}g_t^{(\ell)}.
+\]
+
+
+
+\[
+\mathcal{C}(1,1,1,2,2,3)=(1,2,3),
+\quad
+y_t=\text{nextdiff}(\text{SAM}(\mathcal{C}(z_{<t}))),
+\]
+
+\[
+h^{(\ell+1)}=h^{(\ell)}+\mathrm{Attn}_{\text{win}}^{(\ell)}+\!v^{(\ell)}+\mathrm{MLP}^{(\ell)}.
+\]
 
 ---
 

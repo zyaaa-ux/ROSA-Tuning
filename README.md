@@ -6,6 +6,8 @@ ROSA is a non-neural memory mechanism running on CPUs, capable of achieving perf
 
 ROSA-Tuning integrates this mechanism with modern large language models, enabling them to handle arbitrarily long inputs using only a fixed-length attention window, while achieving better performance than full global attention.
 
+During inference, ROSA only needs to cache the rosa_token_id corresponding to the input sequence, instead of the costly kv_cache, achieving an O(1) spatiotemporal complexity per step.
+
 The current implementation already supports multi-GPU, multi-node, and multi-core training, and more efficient methods are under continuous development.
 
 ---

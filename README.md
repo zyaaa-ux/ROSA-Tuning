@@ -148,6 +148,7 @@ $$
 - Added a new ROSA fusion method `pre_attn`, which injects ROSA representations before the attention layer, allowing the window attention to operate directly in the $(h + v)$ space.  Currently, its performance is slightly worse than that of `post_attn`.  
 - Also added code to enable the model to load ROSA-related files and perform inference.
 - Fix some bugs.
+- 2× faster — Added a high-performance C++ kernel and several other optimizations. 
 
 
 

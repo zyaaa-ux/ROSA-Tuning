@@ -32,6 +32,15 @@ ROSA enables windowed attention to outperform the global attention baseline.
 
 ---
 
+## Core Advantages
+
+- **Infinite-range, lossless memory:** ROSA performs exact substring matching and copies true historical successors, with retrieval range unlimited by window size.  
+- **Minimal GPU overhead:** ROSA core is parameter-free and runs on CPU; GPU only performs small vocabulary projection and representation injection, significantly saving the $O(T^2)$ cost of global attention.  
+- **Windowed attention handles arbitrary-length sequences:** Cross-window information passes through ROSA's discrete channel, while windowed attention only performs local fusion.  
+- **Maintains trainability:** STE achieves both hard copy and soft gradients; per-layer independent $\{W_{lm}^{(\ell)}, E^{(\ell)}\}$ enables the network to learn internal discrete language, evolving layer-by-layer into symbol streams efficiently retrievable by ROSA.  
+
+---
+
 ## Method Overview
 
 ### Core Formula
@@ -134,14 +143,7 @@ $$
 y_t=\mathrm{nextdiff}(\mathrm{SAM}(\mathcal{C}(z_{<t>})))
 $$
 
----
 
-## Core Advantages
-
-- **Infinite-range, lossless memory:** ROSA performs exact substring matching and copies true historical successors, with retrieval range unlimited by window size.  
-- **Minimal GPU overhead:** ROSA core is parameter-free and runs on CPU; GPU only performs small vocabulary projection and representation injection, significantly saving the $O(T^2)$ cost of global attention.  
-- **Windowed attention handles arbitrary-length sequences:** Cross-window information passes through ROSA's discrete channel, while windowed attention only performs local fusion.  
-- **Maintains trainability:** STE achieves both hard copy and soft gradients; per-layer independent $\{W_{lm}^{(\ell)}, E^{(\ell)}\}$ enables the network to learn internal discrete language, evolving layer-by-layer into symbol streams efficiently retrievable by ROSA.  
 
 ---
 

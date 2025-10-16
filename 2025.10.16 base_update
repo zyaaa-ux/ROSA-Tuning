@@ -51,9 +51,10 @@ try:
 except Exception:
     _NUMBA_OK = False
 
+
 MODEL_LOCAL_DIR = ""
-DATASET_DIR = ""
-OUTPUT_DIR = ""
+DATASET_DIR     = ""
+OUTPUT_DIR      = ""
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 USE_FLASH_ATTN = None
@@ -63,11 +64,11 @@ SEQ_LEN = None
 ATTN_WINDOW = None
 FIRST_GLOBAL_LAYERS = None
 
-ROSA_NUM_ROUTES = None
-ROSA_VOCAB_SIZE = None
-LCG_TOPK = None
-LCG_POS_SUBSAMPLE = None
-ROSA_CPU_WORKERS = None
+ROSA_NUM_ROUTES: int = None
+ROSA_VOCAB_SIZE: int = None
+LCG_TOPK: int = None
+LCG_POS_SUBSAMPLE: float = None
+ROSA_CPU_WORKERS: int = None
 
 LR_ROSA = None
 LR_BACKBONE = None
@@ -155,8 +156,8 @@ _PER_RANK_CPUS = max(1, _TOTAL_CPUS // max(1, LOCAL_WORLD_SIZE))
 torch.set_num_threads(_PER_RANK_CPUS)
 
 def _rosa_worker_init():
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("OMP_NUM_THREADS", "")
+    os.environ.setdefault("MKL_NUM_THREADS", "")
     try:
         import torch as _t
         _t.set_num_threads(1)
@@ -264,115 +265,19 @@ class _SAMFoldedCPU:
             self.extend_run(x)
         return a
 
-@dataclass
-class FixedLenLMCollator:
-    pad_token_id: int
-    seq_len: int
+class _PinnedBufferPool:
+    def __init__(self):
+        self._pool = {}
 
-    def __call__(self, features):
-        input_ids = [f["input_ids"][: self.seq_len] for f in features]
-        if "attention_mask" in features[0]:
-            attention_mask = [f["attention_mask"][: self.seq_len] for f in features]
-        else:
-            attention_mask = [[1] * len(x) for x in input_ids]
+    def get(self, tag: str, shape: tuple, dtype: torch.dtype = torch.int32):
+        key = (tag, shape, dtype)
+        t = self._pool.get(key, None)
+        if t is None or t.shape != torch.Size(shape) or t.dtype != dtype:
+            t = torch.empty(shape, dtype=dtype, device='cpu', pin_memory=True)
+            self._pool[key] = t
+        return t
 
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
-        attention_mask = torch.tensor(attention_mask, dtype=torch.long)
-        if input_ids.shape[1] < self.seq_len:
-            pad_len = self.seq_len - input_ids.shape[1]
-            pad = torch.full((input_ids.size(0), pad_len), self.pad_token_id, dtype=torch.long)
-            input_ids = torch.cat([input_ids, pad], dim=1)
-            attention_mask = torch.cat([attention_mask, torch.zeros_like(pad)], dim=1)
-
-        if "labels" in features[0]:
-            labels = [f["labels"][: self.seq_len] for f in features]
-            labels = torch.tensor(labels, dtype=torch.long)
-            if labels.shape[1] < self.seq_len:
-                lab_pad = torch.full((labels.size(0), self.seq_len - labels.shape[1]), -100, dtype=torch.long)
-                labels = torch.cat([labels, lab_pad], dim=1)
-        else:
-            labels = input_ids.clone()
-            labels[labels == self.pad_token_id] = -100
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
-
-def _env_float(k, default):
-    try:
-        return float(os.environ.get(k, default))
-    except Exception:
-        return default
-
-_ROSA_POOL: Optional[ProcessPoolExecutor] = None
-_ROSA_POOL_PID = None
-_ROSA_POOL_LOCK = threading.Lock()
-
-def _rosa_pool_ping() -> int:
-    return 0
-
-def _get_rosa_pool() -> ProcessPoolExecutor:
-    from concurrent.futures import ProcessPoolExecutor
-    import multiprocessing as mp
-    global _ROSA_POOL, _ROSA_POOL_PID
-
-    cur_pid = os.getpid()
-    with _ROSA_POOL_LOCK:
-        need_create = (_ROSA_POOL is None) or (_ROSA_POOL_PID != cur_pid)
-        if not need_create:
-            try:
-                fut = _ROSA_POOL.submit(_rosa_pool_ping)
-                fut.result(timeout=0.05)
-            except Exception:
-                try:
-                    _ROSA_POOL.shutdown(wait=False, cancel_futures=True)
-                except Exception:
-                    pass
-                _ROSA_POOL = None
-                need_create = True
-
-        if need_create:
-            ctx = mp.get_context("spawn")
-
-            oversub = max(1.0, _env_float("ROSA_POOL_OVERSUB", 1.0))
-            hard_max = _env_int("ROSA_POOL_MAX_WORKERS", 0)
-            req_max  = _env_int("ROSA_CPU_WORKERS", ROSA_CPU_WORKERS)
-
-            logical_cap = int(max(1, _PER_RANK_CPUS * oversub))
-            if hard_max > 0:
-                logical_cap = min(logical_cap, hard_max)
-
-            max_workers = max(1, min(req_max, logical_cap))
-
-            _ROSA_POOL = ProcessPoolExecutor(
-                max_workers=max_workers,
-                mp_context=ctx,
-                initializer=_rosa_worker_init,
-            )
-            _ROSA_POOL_PID = cur_pid
-    return _ROSA_POOL
-
-@atexit.register
-def _shutdown_rosa_pool():
-    global _ROSA_POOL
-    with _ROSA_POOL_LOCK:
-        if _ROSA_POOL is not None:
-            try:
-                _ROSA_POOL.shutdown(wait=True, cancel_futures=True)
-            except Exception:
-                pass
-            _ROSA_POOL = None
-
-def _rosa_worker_batch_btm_sam_exact(z_btm_np: "_np.ndarray", K: int) -> "_np.ndarray":
-    B, T, M = z_btm_np.shape
-    y_btm = _np.empty((B, T, M), dtype=_np.int32)
-    for b in range(B):
-        y_btm[b] = _rosa_worker_batch_sample_sam_exact(z_btm_np[b], K)
-    return y_btm
-
-def _count_runs(z):
-    if not z:
-        return 0
-    arr = _np.asarray(z, dtype=_np.int32)
-    return int(1 + _np.count_nonzero(arr[1:] != arr[:-1]))
+_PINNED_POOL = _PinnedBufferPool()
 
 if _NUMBA_OK:
     @(_nb.njit(cache=True, fastmath=False))
@@ -568,144 +473,224 @@ if _NUMBA_OK:
                     out[b, m] = _lcg_index_level_seq_nb(z_btm[b, :, m], K, cand_bmtk[b, m], pos_mask_bt[b])
         return out
 
-def _rosa_one_sequence_sam_cpu(z_seq, K: int):
-    if _NUMBA_OK:
-        z = _np.asarray(z_seq, dtype=_np.int32)
-        y = _rosa_seq_folded_nb(z, int(K))
-        return [int(v) for v in y]
-    T = len(z_seq)
-    if T == 0: return []
-    R = _count_runs(z_seq)
-    S_cap = max(4, 2 * R + 5)
-    sam = _SAMFoldedCPU(max_states=S_cap, K=K)
-    y = []
-    last = None
-    for t in range(T):
-        x = int(z_seq[t])
-        a = sam.nextdiff_from_state(sam.match_next(x))
-        y.append(-1 if a is None else int(a))
-        if (last is None) or (x != last):
-            sam.extend_run(x); last = x
-    return y
+if _NUMBA_OK:
+    @(_nb.njit(cache=True, fastmath=False))
+    def _rosa_seq_with_ws_nb(z, K: int, S_cap: int):
+        T = z.shape[0]
+        y = _np.empty((T,), dtype=_np.int32)
+        last_trace = _np.empty((T,), dtype=_np.int32)
 
-def _rosa_worker_batch_sample_sam_exact(z_tm_np: "_np.ndarray", K: int) -> "_np.ndarray":
-    if _NUMBA_OK:
-        T, M = z_tm_np.shape
-        z_btm = z_tm_np.reshape(1, T, M)
-        y_btm = _rosa_batch_btm_nb(z_btm, int(K))
-        return y_btm[0]
-    T, M = z_tm_np.shape
-    y_tm = _np.empty((T, M), dtype=_np.int32)
-    for m in range(M):
-        y_tm[:, m] = _np.asarray(_rosa_one_sequence_sam_cpu(z_tm_np[:, m].tolist(), K), dtype=_np.int32)
-    return y_tm
+        next_arr = _np.empty((S_cap, K), dtype=_np.int32)
+        link     = _np.empty((S_cap,),   dtype=_np.int32)
+        length   = _np.empty((S_cap,),   dtype=_np.int32)
+        e        = _np.empty((S_cap,),   dtype=_np.int32)
 
-def _rosa_query_sam_exact(z_btm: torch.Tensor, K: int, impl: str = "sam_cpu", pool_getter=_get_rosa_pool) -> torch.Tensor:
-    assert z_btm.ndim == 3
-    B, T, M = z_btm.shape
-    device = z_btm.device
+        for j in range(K): next_arr[0, j] = -1
+        link[0]   = -1
+        length[0] = 0
+        e[0]      = -1
+        size = _np.empty((1,), dtype=_np.int32); size[0] = 1
+        last_arr = _np.empty((1,), dtype=_np.int32); last_arr[0] = 0
 
-    if impl != "sam_cpu":
-        ys = []
-        for b in range(B):
-            y_tm = torch.empty((T, M), dtype=torch.int64, device=device)
-            for m in range(M):
-                y_seq = _rosa_one_sequence_sam_cpu(z_btm[b, :, m].to(torch.int32).tolist(), K)
-                y_tm[:, m] = torch.tensor(y_seq, dtype=torch.int64, device=device)
-            ys.append(y_tm)
-        return torch.stack(ys, dim=0)
+        c = _np.empty((T,), dtype=_np.int32)
+        c_len = 0
+        last_sym = -2147483647
 
-    z_np = to_c_np(z_btm, dtype=_np.int32)
-
-    if '_rosa_batch_btm_nb' in globals() and _NUMBA_OK:
-        y_np = _rosa_batch_btm_nb(z_np, int(K))
-        return torch.from_numpy(y_np).to(device=device, dtype=torch.int64, non_blocking=True)
-
-    pool = pool_getter()
-    fut = pool.submit(_rosa_worker_batch_btm_sam_exact, z_np, K)
-    y_np = fut.result()
-    return torch.from_numpy(y_np).to(device=device, dtype=torch.int64)
-
-def _lcg_route_worker_index_level_sam(args):
-    (T, K, z_seq, cand_lists, pos_mask) = args
-    if _NUMBA_OK:
-        z = _np.asarray(z_seq, dtype=_np.int32)
-        topk = len(cand_lists[0]) if T > 0 else 0
-        cand = _np.empty((T, topk), dtype=_np.int32)
         for t in range(T):
-            row = cand_lists[t]
-            for j in range(topk):
-                cand[t, j] = int(row[j])
-        if pos_mask is None:
-            mask = _np.ones((T,), dtype=_np.bool_)
-        else:
-            mask = _np.asarray(pos_mask, dtype=_np.bool_)
-        ycf = _lcg_index_level_seq_nb(z, int(K), cand, mask)
-        out = []
-        for i in range(T):
-            row = [_np.int32(ycf[i, j]).item() for j in range(cand.shape[1])]
-            out.append(row)
-        return out
+            last_trace[t] = last_arr[0]
+            x = z[t]
+            q = _sam_match_next(next_arr, link, last_arr[0], x)
+            if q == -1:
+                y[t] = -1
+            else:
+                rpos = e[q]; nxt = rpos + 1
+                if 0 <= rpos and nxt < c_len:
+                    y[t] = c[nxt]
+                else:
+                    y[t] = -1
+            if t == 0 or x != last_sym:
+                c[c_len] = x; c_len += 1
+                _sam_extend(next_arr, link, length, e, last_arr, size, x, c_len - 1)
+                last_sym = x
 
-    R = _count_runs(z_seq)
-    S_cap = max(4, 2 * R + 5)
-    sam = _SAMFoldedCPU(max_states=S_cap, K=K)
-    y_cf_lists = []
-    last = None
-    for t in range(T):
-        x = int(z_seq[t])
-        cands = cand_lists[t]
-        if (pos_mask is not None) and (not pos_mask[t]):
-            y_cf_lists.append([-2] * len(cands))
-        else:
-            row = []
-            for k in cands:
-                q = sam.match_next(int(k))
-                a = sam.nextdiff_from_state(q)
-                row.append(-1 if a is None else int(a))
-            y_cf_lists.append(row)
-        if (last is None) or (x != last):
-            sam.extend_run(x); last = x
-    return y_cf_lists
+        return y, last_trace, next_arr, link, e, c, _np.int32(c_len)
 
-def _lcg_worker_index_level_sam_btm(args):
-    (T, K, z_btm_np, cand_bmtk_np, pos_mask_bt) = args
-    if _NUMBA_OK:
-        if pos_mask_bt is None:
-            mask = _np.ones((z_btm_np.shape[0], z_btm_np.shape[1]), dtype=_np.bool_)
+    @(_nb.njit(cache=True, fastmath=False))
+    def _rosa_batch_btm_with_ws_nb(z_btm, K: int):
+        B, T, M = z_btm.shape
+        S_cap = 2 * T + 5
+
+        y_btm         = _np.empty((B, T, M), dtype=_np.int32)
+        last_btm      = _np.empty((B, T, M), dtype=_np.int32)
+        next_bmsk     = _np.empty((B, M, S_cap, K), dtype=_np.int32)
+        link_bms      = _np.empty((B, M, S_cap),     dtype=_np.int32)
+        e_bms         = _np.empty((B, M, S_cap),     dtype=_np.int32)
+        c_bmt         = _np.empty((B, M, T),         dtype=_np.int32)
+        c_len_bm      = _np.empty((B, M),            dtype=_np.int32)
+
+        if _PARALLEL:
+            for idx in _nb.prange(B * M):
+                b = idx // M
+                m = idx % M
+                y, last_tr, nxt, lnk, ee, cc, clen = _rosa_seq_with_ws_nb(z_btm[b, :, m], K, S_cap)
+                y_btm[b, :, m] = y
+                last_btm[b, :, m] = last_tr
+                next_bmsk[b, m, :, :] = nxt
+                link_bms[b, m, :] = lnk
+                e_bms[b, m, :] = ee
+                c_bmt[b, m, :] = 0
+                for i in range(T):
+                    if i < clen:
+                        c_bmt[b, m, i] = cc[i]
+                c_len_bm[b, m] = clen
         else:
-            mask = pos_mask_bt.astype(_np.bool_)
-        y_cf = _lcg_index_level_bmt_nb(z_btm_np, int(K), cand_bmtk_np, mask)
-        return y_cf
-    B, _, M = z_btm_np.shape
-    topk = cand_bmtk_np.shape[-1]
-    y_cf = _np.empty((B, M, T, topk), dtype=_np.int16)
+            for b in range(B):
+                for m in range(M):
+                    y, last_tr, nxt, lnk, ee, cc, clen = _rosa_seq_with_ws_nb(z_btm[b, :, m], K, S_cap)
+                    y_btm[b, :, m] = y
+                    last_btm[b, :, m] = last_tr
+                    next_bmsk[b, m, :, :] = nxt
+                    link_bms[b, m, :] = lnk
+                    e_bms[b, m, :] = ee
+                    c_bmt[b, m, :] = 0
+                    for i in range(T):
+                        if i < clen:
+                            c_bmt[b, m, i] = cc[i]
+                    c_len_bm[b, m] = clen
+
+        return y_btm, last_btm, next_bmsk, link_bms, e_bms, c_bmt, c_len_bm
+
+def _rosa_batch_btm_with_ws_py(z_btm_np: "_np.ndarray", K: int):
+    B, T, M = z_btm_np.shape
+    S_cap = 2 * T + 5
+
+    y_btm    = _np.empty((B, T, M), dtype=_np.int32)
+    last_btm = _np.empty((B, T, M), dtype=_np.int32)
+    next_bmsk = _np.empty((B, M, S_cap, K), dtype=_np.int32)
+    link_bms  = _np.empty((B, M, S_cap),     dtype=_np.int32)
+    e_bms     = _np.empty((B, M, S_cap),     dtype=_np.int32)
+    c_bmt     = _np.empty((B, M, T),         dtype=_np.int32)
+    c_len_bm  = _np.empty((B, M),            dtype=_np.int32)
+
     for b in range(B):
-        pos_mask = None if pos_mask_bt is None else [bool(x) for x in list(pos_mask_bt[b])]
         for m in range(M):
-            z_seq = z_btm_np[b, :, m].tolist()
-            cand_lists = cand_bmtk_np[b, m].tolist()
-            y_lists = _lcg_route_worker_index_level_sam((T, K, z_seq, cand_lists, pos_mask))
-            y_cf[b, m] = _np.asarray(y_lists, dtype=_np.int16)
-    return y_cf
+            z = [int(v) for v in list(z_btm_np[b, :, m])]
+            sam = _SAMFoldedCPU(max_states=S_cap, K=K)
+            y_seq = []
+            last_trace = []
+            last_sym = None
+            for t in range(T):
+                last_trace.append(int(sam.last))
+                x = z[t]
+                q = sam.match_next(int(x))
+                a = sam.nextdiff_from_state(q)
+                y_seq.append(-1 if a == -1 else int(a))
+                if (last_sym is None) or (x != last_sym):
+                    sam.extend_run(int(x)); last_sym = x
+
+            y_btm[b, :, m] = _np.asarray(y_seq, dtype=_np.int32)
+            last_btm[b, :, m] = _np.asarray(last_trace, dtype=_np.int32)
+            next_bmsk[b, m, :, :] = sam.next
+            link_bms[b, m, :] = sam.link
+            e_bms[b, m, :] = sam.e
+            c_len = len(sam.c)
+            c_len_bm[b, m] = c_len
+            c_bmt[b, m, :] = 0
+            for i in range(min(T, c_len)):
+                c_bmt[b, m, i] = sam.c[i]
+
+    return y_btm, last_btm, next_bmsk, link_bms, e_bms, c_bmt, c_len_bm
+
+def _rosa_batch_btm_with_ws(z_btm_np: "_np.ndarray", K: int):
+    if _NUMBA_OK and ('_rosa_batch_btm_with_ws_nb' in globals()):
+        return _rosa_batch_btm_with_ws_nb(z_btm_np, int(K))
+    return _rosa_batch_btm_with_ws_py(z_btm_np, int(K))
+
+@torch.no_grad()
+def _lcg_query_gpu(
+    next_bmsk: torch.Tensor,
+    link_bms: torch.Tensor,
+    e_bms: torch.Tensor,
+    c_bmt: torch.Tensor,
+    c_len_bm: torch.Tensor,
+    last_state_btm: torch.Tensor,
+    cand_bmtk: torch.Tensor,
+    pos_mask_bt: Optional[torch.Tensor],
+) -> torch.Tensor:
+    device = cand_bmtk.device
+    B, M, S, K = next_bmsk.shape
+    T = last_state_btm.size(1)
+    topk = cand_bmtk.size(-1)
+
+    b_idx = torch.arange(B, device=device).view(B, 1, 1, 1).expand(B, M, T, topk).reshape(-1)
+    m_idx = torch.arange(M, device=device).view(1, M, 1, 1).expand(B, M, T, topk).reshape(-1)
+    t_idx = torch.arange(T, device=device).view(1, 1, T, 1).expand(B, M, T, topk).reshape(-1)
+
+    p = last_state_btm.permute(0, 2, 1).contiguous()
+    p = p.unsqueeze(-1).expand(-1, -1, -1, topk).reshape(-1).to(torch.long)
+
+    x = cand_bmtk.reshape(-1).to(torch.long)
+
+    q = torch.full_like(p, -1, dtype=torch.long)
+    done = (p == -1)
+
+    for _ in range(S):
+        p_clamped = torch.clamp(p, 0, S - 1)
+        nxt_val = next_bmsk[b_idx, m_idx, p_clamped, x].to(torch.long)
+        has = (~done) & (nxt_val != -1)
+        q = torch.where(has, nxt_val, q)
+        done = done | has | (p == -1)
+        if bool(done.all()):
+            break
+        p_next = link_bms[b_idx, m_idx, p_clamped].to(torch.long)
+        p = torch.where(~done, p_next, p)
+
+    q_valid = (q != -1)
+    qc = torch.clamp(q, 0, S - 1)
+    rpos = torch.where(q_valid, e_bms[b_idx, m_idx, qc].to(torch.long), torch.full_like(q, -1))
+    nxtp = rpos + 1
+    clen = c_len_bm[b_idx, m_idx].to(torch.long)
+    valid2 = (rpos >= 0) & (nxtp < clen)
+    nxtp_c = torch.clamp(nxtp, 0, c_bmt.size(2) - 1)
+    cval = c_bmt[b_idx, m_idx, nxtp_c].to(torch.long)
+    result = torch.where(q_valid & valid2, cval, torch.full_like(cval, -1))
+
+    if pos_mask_bt is not None:
+        pmask = pos_mask_bt.unsqueeze(1).unsqueeze(-1).expand(B, M, T, topk).reshape(-1)
+        result = torch.where(pmask, result, torch.full_like(result, -2))
+
+    return result.view(B, M, T, topk).to(torch.int16)
 
 class MultiRouteLCGFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,
-                v_in: torch.Tensor,
-                logits_all: torch.Tensor,
-                y_idx: torch.Tensor,
-                E_stack: torch.Tensor,
-                z_host_pinned: torch.Tensor,
-                pos_mask_cpu: list | None):
-        ctx.save_for_backward(logits_all, y_idx, E_stack)
-        ctx.z_host_pinned = z_host_pinned
+    def forward(
+        ctx,
+        v_in: torch.Tensor,
+        logits_all: torch.Tensor,
+        y_idx: torch.Tensor,
+        E_stack: torch.Tensor,
+        sam_next_bmsk: torch.Tensor,
+        sam_link_bms: torch.Tensor,
+        sam_e_bms: torch.Tensor,
+        sam_c_bmt: torch.Tensor,
+        sam_c_len_bm: torch.Tensor,
+        sam_last_state_btm: torch.Tensor,
+        pos_mask_cpu: Optional[list],
+    ):
+        ctx.save_for_backward(
+            logits_all, y_idx, E_stack,
+            sam_next_bmsk, sam_link_bms, sam_e_bms,
+            sam_c_bmt, sam_c_len_bm, sam_last_state_btm
+        )
         ctx.pos_mask_cpu = pos_mask_cpu
         return v_in
 
     @staticmethod
     def backward(ctx, grad_v: torch.Tensor):
-        (logits_all, y_idx, E_stack) = ctx.saved_tensors
+        (logits_all, y_idx, E_stack,
+         sam_next_bmsk, sam_link_bms, sam_e_bms,
+         sam_c_bmt, sam_c_len_bm, sam_last_state_btm) = ctx.saved_tensors
+
         device = logits_all.device
         B, T, M, K = logits_all.shape
 
@@ -715,43 +700,29 @@ class MultiRouteLCGFunction(torch.autograd.Function):
             topk = min(LCG_TOPK, K)
             idx_topk_bmt = torch.topk(p_all_bmtk, k=topk, dim=-1).indices
 
-        cand_host = torch.empty_like(idx_topk_bmt, device='cpu', pin_memory=True)
-        cand_host.copy_(idx_topk_bmt, non_blocking=True)
-        ev = torch.cuda.Event(); ev.record(torch.cuda.current_stream())
-
-        z_btm_np = np.asarray(ctx.z_host_pinned, order="C")
-
-        if ctx.pos_mask_cpu is None:
-            pos_mask_bt_np = np.ones((B, T), dtype=np.bool_)
-        else:
-            pos_mask_bt_np = np.asarray(ctx.pos_mask_cpu, dtype=np.bool_, order="C")
-            if pos_mask_bt_np.ndim != 2 or pos_mask_bt_np.shape != (B, T):
-                pos_mask_bt_np = np.ones((B, T), dtype=np.bool_)
-
-        def _wait_and_lcg():
-            _wait_event(ev)
-            cand_np = np.asarray(cand_host, order="C")
-            if _NUMBA_OK and ('_lcg_index_level_bmt_nb' in globals()):
-                return _lcg_index_level_bmt_nb(z_btm_np, int(K), cand_np, pos_mask_bt_np)
+        with torch.no_grad():
+            if ctx.pos_mask_cpu is None:
+                pos_mask_bt = torch.ones((B, T), device=device, dtype=torch.bool)
             else:
-                return _lcg_worker_index_level_sam_btm((T, int(K), z_btm_np, cand_np, pos_mask_bt_np))
-
-        fut_cf = _ROSA_THREAD_POOL.submit(_wait_and_lcg)
+                pos_mask_bt = torch.tensor(ctx.pos_mask_cpu, device=device, dtype=torch.bool)
 
         with torch.no_grad():
             g_no_scale = grad_v.float()
-            E_stack_f = E_stack.float()
-            S = torch.einsum("btd,mkd->bmtk", g_no_scale, E_stack_f).to(device)
-
-            y_old_bmt = y_idx.permute(0, 2, 1)
+            S = torch.einsum("btd,mkd->bmtk", g_no_scale, E_stack.float())
+            y_old_bmt = y_idx.permute(0, 2, 1).contiguous()
             y_old_exp = y_old_bmt.unsqueeze(-1).expand(-1, -1, -1, topk)
 
-        y_cf_bmtk_np = fut_cf.result()
+        y_cf_bmtk = _lcg_query_gpu(
+            sam_next_bmsk, sam_link_bms, sam_e_bms,
+            sam_c_bmt, sam_c_len_bm, sam_last_state_btm,
+            idx_topk_bmt, pos_mask_bt
+        )
+
         with torch.no_grad():
-            y_cf_bmtk = torch.from_numpy(y_cf_bmtk_np).to(device=device, dtype=torch.long)
-            skip_mask = (y_cf_bmtk == -2)
-            pad_mask  = (y_cf_bmtk == -1)
-            idx_new   = torch.where(pad_mask, torch.zeros_like(y_cf_bmtk), y_cf_bmtk + 1)
+            y_cf_bmtk_long = y_cf_bmtk.to(torch.long)
+            skip_mask = (y_cf_bmtk_long == -2)
+            pad_mask  = (y_cf_bmtk_long == -1)
+            idx_new   = torch.where(pad_mask, torch.zeros_like(y_cf_bmtk_long), y_cf_bmtk_long + 1)
 
             S_new = torch.gather(S, dim=-1, index=idx_new)
             S_old = torch.gather(S, dim=-1, index=y_old_exp)
@@ -759,7 +730,6 @@ class MultiRouteLCGFunction(torch.autograd.Function):
             deltas = torch.where(skip_mask, torch.zeros_like(deltas), deltas)
 
             probs_topk = torch.gather(p_all_bmtk, dim=-1, index=idx_topk_bmt)
-
             mean_delta = (probs_topk * deltas).sum(dim=-1, keepdim=True)
             grad_topk  = probs_topk * (deltas - mean_delta)
 
@@ -770,7 +740,46 @@ class MultiRouteLCGFunction(torch.autograd.Function):
             grad_logits_flat.scatter_add_(dim=1, index=idx_flat, src=src_flat)
             grad_logits = grad_logits_flat.view(B, M, T, K).permute(0, 2, 1, 3).to(logits_all.dtype)
 
-        return grad_v, grad_logits, None, None, None, None
+        return grad_v, grad_logits, None, None, None, None, None, None, None, None, None
+
+@dataclass
+class FixedLenLMCollator:
+    pad_token_id: int
+    seq_len: int
+
+    def __call__(self, features):
+        input_ids = [f["input_ids"][: self.seq_len] for f in features]
+        if "attention_mask" in features[0]:
+            attention_mask = [f["attention_mask"][: self.seq_len] for f in features]
+        else:
+            attention_mask = [[1] * len(x) for x in input_ids]
+
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        attention_mask = torch.tensor(attention_mask, dtype=torch.long)
+        if input_ids.shape[1] < self.seq_len:
+            pad_len = self.seq_len - input_ids.shape[1]
+            pad = torch.full((input_ids.size(0), pad_len), self.pad_token_id, dtype=torch.long)
+            input_ids = torch.cat([input_ids, pad], dim=1)
+            attention_mask = torch.cat([attention_mask, torch.zeros_like(pad)], dim=1)
+
+        if "labels" in features[0]:
+            labels = [f["labels"][: self.seq_len] for f in features]
+            labels = torch.tensor(labels, dtype=torch.long)
+            if labels.shape[1] < self.seq_len:
+                lab_pad = torch.full((labels.size(0), self.seq_len - labels.shape[1]), -100, dtype=torch.long)
+                labels = torch.cat([labels, lab_pad], dim=1)
+        else:
+            labels = input_ids.clone()
+            labels[labels == self.pad_token_id] = -100
+
+        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple, List
+from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM, Qwen3DecoderLayer
 
 def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
     import os
@@ -787,8 +796,8 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
     M = int(ROSA_NUM_ROUTES)
     K = int(ROSA_VOCAB_SIZE)
 
-    inject_mode = os.environ.get("ROSA_INJECT_MODE", "pre_attn").lower()
-    lcg_enable  = os.environ.get("LCG_ENABLE", "0") in ("1", "true", "True")
+    inject_mode = os.environ.get("ROSA_INJECT_MODE", "").lower()
+    lcg_enable  = os.environ.get("LCG_ENABLE", "") in ("1", "true", "True")
 
     for li, layer in enumerate(model.model.layers):
         if li == 0:
@@ -811,69 +820,75 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
         layer.rosa_num_routes = M
         layer.rosa_vocab_size = K
 
-        def _forward_with_multiroute_rosa(self: Qwen3DecoderLayer,
-                                          hidden_states: torch.Tensor,
-                                          attention_mask: Optional[torch.Tensor] = None,
-                                          position_ids: Optional[torch.LongTensor] = None,
-                                          past_key_values=None,
-                                          use_cache: Optional[bool] = False,
-                                          cache_position: Optional[torch.LongTensor] = None,
-                                          position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                                          **kwargs):
+        def _forward_with_multiroute_rosa(
+            self: Qwen3DecoderLayer,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_values=None,
+            use_cache: Optional[bool] = False,
+            cache_position: Optional[torch.LongTensor] = None,
+            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+            **kwargs
+        ):
             residual = hidden_states
             B, T, H = hidden_states.shape
             M = self.rosa_num_routes
             K = self.rosa_vocab_size
+            device = hidden_states.device
 
             u_head = self.input_layernorm(hidden_states)
-            logits_list, z_list_gpu = [], []
-            for head in self.rosa_wlm_list:
-                if u_head.dtype is not head.weight.dtype:
-                    logits_m = F.linear(u_head.to(head.weight.dtype), head.weight, None).to(u_head.dtype)
-                else:
-                    logits_m = F.linear(u_head, head.weight, None)
-                logits_list.append(logits_m)
-                z_list_gpu.append(torch.argmax(logits_m, dim=-1))
-            logits_all = torch.stack(logits_list, dim=2)
-            z_gpu      = torch.stack(z_list_gpu, dim=2)
+            w_stack = torch.stack([w.weight for w in self.rosa_wlm_list], dim=0)
+            logits_all = torch.einsum("bth,mkh->btmk", u_head, w_stack.to(u_head.dtype))
 
-            nvtx.range_push("ROSA_async_copy_and_run")
-            z_i32  = z_gpu.to(torch.int32)
-            z_host = torch.empty_like(z_i32, device='cpu', pin_memory=True)
-            z_host.copy_(z_i32, non_blocking=True)
+            z_gpu = torch.argmax(logits_all, dim=-1).to(torch.int32)
+
+            nvtx.range_push("ROSA_async_copy_and_run_ws")
+            z_host = _PINNED_POOL.get("z_host", (B, T, M), dtype=torch.int32)
+            z_host.copy_(z_gpu, non_blocking=True)
             ev = torch.cuda.Event(); ev.record(torch.cuda.current_stream())
 
-            def _wait_and_rosa():
+            def _wait_and_rosa_ws():
                 _wait_event(ev)
-                z_np = np.asarray(z_host, order="C")
-                if '_rosa_batch_btm_nb' in globals() and _NUMBA_OK:
-                    return _rosa_batch_btm_nb(z_np, int(K))
-                else:
-                    return _rosa_worker_batch_btm_sam_exact(z_np, int(K))
-            fut_y = _ROSA_THREAD_POOL.submit(_wait_and_rosa)
+                z_np = _np.asarray(z_host, order="C")
+                return _rosa_batch_btm_with_ws(z_np, int(K))
+
+            fut_ws = _ROSA_THREAD_POOL.submit(_wait_and_rosa_ws)
             nvtx.range_pop()
 
-            nvtx.range_push("ROSA_gather_embed")
-            y_np  = fut_y.result()
-            y_btm = torch.from_numpy(y_np).to(device=hidden_states.device, dtype=torch.long, non_blocking=True)
+            (y_np, last_np, next_np, link_np, e_np, c_np, clen_np) = fut_ws.result()
+            y_btm = torch.from_numpy(y_np).to(device=device, dtype=torch.long)
             y_idx = torch.where(y_btm >= 0, y_btm + 1, torch.zeros_like(y_btm))
 
-            e_sum = 0
-            E_stack_gpu = []
-            for m, emb in enumerate(self.rosa_emb_list):
-                e_m = F.embedding(y_idx[:, :, m], emb.weight)
-                e_sum = e_sum + e_m
-                E_stack_gpu.append(emb.weight.detach())
-            v = (e_sum / float(M)).to(u_head.dtype)
-            E_stack_gpu = torch.stack(E_stack_gpu, dim=0)
-            nvtx.range_pop()
+            sam_next_bmsk      = torch.from_numpy(next_np).to(device=device, dtype=torch.int32)
+            sam_link_bms       = torch.from_numpy(link_np).to(device=device, dtype=torch.int32)
+            sam_e_bms          = torch.from_numpy(e_np).to(device=device, dtype=torch.int32)
+            sam_c_bmt          = torch.from_numpy(c_np).to(device=device, dtype=torch.int32)
+            sam_c_len_bm       = torch.from_numpy(clen_np).to(device=device, dtype=torch.int32)
+            sam_last_state_btm = torch.from_numpy(last_np).to(device=device, dtype=torch.int32)
+
+            W_stack = torch.stack([emb.weight for emb in self.rosa_emb_list], dim=0)
+            W_flat  = W_stack.view(M * (K + 1), H)
+            offsets = (torch.arange(M, device=device, dtype=y_idx.dtype) * (K + 1)).view(1, 1, M)
+            idx_flat = (y_idx + offsets).reshape(-1)
+            e_flat = W_flat.index_select(0, idx_flat)
+            e_btmh = e_flat.view(B, T, M, H)
+            v = (e_btmh.sum(dim=2) / float(M)).to(u_head.dtype)
+
+            E_stack_gpu = W_stack.detach()
 
             if lcg_enable:
                 pos_mask_cpu = None
                 if LCG_POS_SUBSAMPLE < 1.0:
-                    mask = (torch.rand((B, T), device=logits_all.device) < LCG_POS_SUBSAMPLE)
-                    pos_mask_cpu = mask.cpu().tolist()
-                v = MultiRouteLCGFunction.apply(v, logits_all, y_idx, E_stack_gpu, z_host, pos_mask_cpu)
+                    mask = (torch.rand((B, T), device=device) < LCG_POS_SUBSAMPLE)
+                    pos_mask_cpu = mask.detach().cpu().tolist()
+
+                v = MultiRouteLCGFunction.apply(
+                    v, logits_all, y_idx, E_stack_gpu,
+                    sam_next_bmsk, sam_link_bms, sam_e_bms,
+                    sam_c_bmt, sam_c_len_bm, sam_last_state_btm,
+                    pos_mask_cpu
+                )
 
             if inject_mode == "pre_attn":
                 u_attn = self.input_layernorm(hidden_states + v)
@@ -1018,7 +1033,7 @@ def main():
     raw = load_from_disk(DATASET_DIR)
     train_ds = raw["train"]
     test_ds = raw.get("test", raw["validation"] if "validation" in raw else None)
-    assert test_ds is not None, "Need test or validation split"
+    assert test_ds is not None, "test or validation split required"
 
     model, tokenizer = build_model_and_tokenizer()
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
@@ -1064,7 +1079,7 @@ def main():
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"Total parameters: {total_params:,}")
+    print(f"total parameters: {total_params:,}")
 
     trainer.train()
     metrics = trainer.evaluate()

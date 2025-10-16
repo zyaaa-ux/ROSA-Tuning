@@ -77,9 +77,6 @@ $$
 
 
 
-
-### LCG 
-
 $$
 g^{(\ell)}_t = \frac{\partial \mathcal{L}}{\partial v^{(\ell)}_t}.
 $$
@@ -103,7 +100,7 @@ $$
 - **10× faster** — event-gated CPU/GPU overlap, pinned memory, vectorized top-k, Numba kernels.  
 - **ROSA fix** — strict *retrieve-then-commit* SAM with rightmost tracking ensures **longest and latest** matches.
 
-### Formulas
+
 
 $$
 \mathbf{logits}^{(\ell,m)} = W_{\mathrm{lm}}^{(\ell,m)}\,u^{(\ell)}, \quad
@@ -151,7 +148,7 @@ $$
 - Added a new ROSA fusion method `pre_attn`, which injects ROSA representations before the attention layer, allowing the window attention to operate directly in the $(h + v)$ space.  Currently, its performance is slightly worse than that of `post_attn`.  
 - Also added code to enable the model to load ROSA-related files and perform inference after ROSA-Tuning.
 
-**pre_attn:**
+
 
 $$u = \mathrm{LN}(h + v)$$
 $$\tilde{h} = h + \mathrm{Attn}_{\text{win}}(u)$$

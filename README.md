@@ -1,12 +1,12 @@
   # ROSA-Tuning: Tuning Global Attention into Better Window Attention
 
-## TL;DR
+## What is ROSA-Tuning
 
-**ROSA-Tuning** adds minimal per-layer discrete adapter parameters $W_{lm}^{(\ell)}, E^{(\ell)}$ while keeping the pretrained model frozen, enabling windowed attention models to achieve even better ultra-long-range memory capabilities than global attention.
+ROSA is a non-neural memory mechanism running on CPUs, capable of achieving perfect recall and precise matching over infinitely long contexts.
 
-**Practical results:** After replacing global attention with windowed attention in Qwen3-0.6B, adding ROSA branch and freezing the original model, training for one epoch on 28,000 samples achieves better PPL on PG-19-16k than the original global attention model.
+ROSA-Tuning integrates this mechanism with modern large language models, enabling them to handle arbitrarily long inputs using only a fixed-length attention window, while achieving better performance than full global attention.
 
-**Resource advantages:** ROSA core is parameter-free and runs on CPU, while GPU only handles small matrix projection and representation injection; windowed attention can process arbitrary-length contexts (limited by CPU-side index memory), significantly reducing the quadratic complexity cost of global attention.
+The current implementation already supports multi-GPU, multi-node, and multi-core training, and more efficient methods are under continuous development.
 
 ---
 

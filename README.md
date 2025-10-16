@@ -160,7 +160,8 @@ $$h^{+} = \tilde{h} + \mathrm{MLP}\big(\mathrm{LN}(\tilde{h})\big)$$
 
 ## Citation
 
-Original ROSA discussion: [https://x.com/BlinkDL_AI/status/1976912771985146184](https://x.com/BlinkDL_AI/status/1976912771985146184)
+Original ROSA discussion: [https://github.com/BlinkDL/RWKV-LM/tree/main/RWKV-v8](https://github.com/BlinkDL/RWKV-LM/tree/main/RWKV-v8)
+
 
 Proposes using Suffix Automaton for neurosymbolic infinite-range, lossless information propagation in LLMs as a memory/retrieval channel beyond attention.
 

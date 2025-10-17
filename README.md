@@ -17,7 +17,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 ### Setup
 
 - **Base model:** Qwen3-0.6B with global attention or windowed attention  
-- **Training:** 28,000 samples, 1 epoch on PG-19 training set, original model frozen, only ROSA adapters trained  
+- **Training:** 1 epoch on PG-19 training set, original model frozen, only ROSA adapters trained  
 - **Evaluation:** PG-19 test set, sequence length 32k, window size 1024  
 
 ### Perplexity (PPL) Comparison On Validation Datasets

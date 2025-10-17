@@ -17,17 +17,18 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 ### Setup
 
 - **Base model:** Qwen3-0.6B with global attention or windowed attention  
-- **Training:** 1 epoch on PG-19 training set, original model frozen, only ROSA adapters trained  
-- **Evaluation:** PG-19 test set, sequence length 32k, window size 1024  
+- **Training:** 28,000 samples, 1 epoch on PG-19 training set, original model frozen, only ROSA adapters trained  
+- **Evaluation:** PG-19 test set, sequence length 16k, window size 1024  
 
 ### Perplexity (PPL) Comparison On Validation Datasets
 
 | Model | PPL |
 |:------|----:|
-| Global Attention | 31.09 |
-| Windowed Attention | 497.91 |
-| Windowed Attention + ROSA (2025.10.17) | testing |
-
+| Global Attention | 31.96 |
+| Windowed Attention | 465.59 |
+| Windowed Attention + ROSA (2025.10.13) | 25.96 |
+| Windowed Attention + ROSA (2025.10.14) | 20.01 |
+| Windowed Attention + ROSA (2025.10.15) | 19.93 |
 
 ROSA enables windowed attention to outperform the global attention baseline.
 

@@ -158,6 +158,12 @@ $$h^{+} = \tilde{h} + \mathrm{MLP}\big(\mathrm{LN}(\tilde{h})\big)$$
 
 ---
 
+## Update · 2025-10-16
+
+GPU resources have been tight lately, so I haven’t been able to get any allocation. I’ll focus on optimizing and updating the code this week, and plan to run larger-scale experiments once resources free up next week.
+
+---
+
 ## Citation
 
 Original ROSA discussion: [https://github.com/BlinkDL/RWKV-LM/tree/main/RWKV-v8](https://github.com/BlinkDL/RWKV-LM/tree/main/RWKV-v8)

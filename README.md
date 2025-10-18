@@ -158,7 +158,7 @@ $$h^{+} = \tilde{h} + \mathrm{MLP}\big(\mathrm{LN}(\tilde{h})\big)$$
 
 ---
 
-## Update · 2025-10-16
+## Update · 2025-10-18
 
 GPU resources have been tight lately, so I haven’t been able to get any allocation. I’ll focus on optimizing and updating the code this week, and plan to run larger-scale experiments once resources free up next week.
 

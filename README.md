@@ -76,7 +76,7 @@ $$
 
 - The fusion method of ROSA has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
 
-- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the Rosa module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by ROSA-Tuning to one-eighth of the original, while achieving better performance.
+- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the ROSA module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by ROSA-Tuning to one-eighth of the original, while achieving better performance.
 
 - The QKV-ROSA module is currently under development. Most of the core code has been completed, and we are now addressing the backpropagation issue for the K head. The update is expected to be released tomorrow or the day after.
 

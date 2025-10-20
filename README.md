@@ -29,8 +29,11 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 | Windowed Attention + ROSA (2025.10.13) | 25.96 |
 | Windowed Attention + ROSA (2025.10.14) | 20.01 |
 | Windowed Attention + ROSA (2025.10.15) | 19.93 |
+| Windowed Attention + ROSA (2025.10.20, 1/8 parameters) | 19.82 |
 
 ROSA enables windowed attention to outperform the global attention baseline.
+
+In our experiments, Rosa-tuning demonstrates even greater advantages on 32k and longer sequences. Here, we only present the 16k test results, but you are welcome to explore other configurations if interested.
 
 ---
 
@@ -39,7 +42,7 @@ ROSA enables windowed attention to outperform the global attention baseline.
 - **Infinite-range, lossless memory:** ROSA performs exact substring matching and copies true historical successors, with retrieval range unlimited by window size.  
 - **Minimal GPU overhead:** ROSA core is parameter-free and runs on CPU; GPU only performs small vocabulary projection and representation injection, significantly saving the $O(T^2)$ cost of global attention.  
 - **Windowed attention handles arbitrary-length sequences:** Cross-window information passes through ROSA's discrete channel, while windowed attention only performs local fusion.  
-- **Maintains trainability:** STE achieves both hard copy and soft gradients; per-layer independent $\{W_{lm}^{(\ell)}, E^{(\ell)}\}$ enables the network to learn internal discrete language, evolving layer-by-layer into symbol streams efficiently retrievable by ROSA.  
+
 
 ---
 
@@ -76,23 +79,6 @@ $$
 - Replaced STE with **Local Counterfactual Gradient (LCG)**; CPU computes $\Delta L_i(k)$ by "change-one-token" simulation and writes position-wise contrastive gradients to logits.  
 
 
-
-$$
-g^{(\ell)}_t = \frac{\partial \mathcal{L}}{\partial v^{(\ell)}_t}.
-$$
-
-$$
-\Delta L_i^{(\ell,m)}(k) \approx \sum_{t \in S_i^{(\ell,m)}(k)} (g^{(\ell)}_t)^\top (E^{(\ell,m)}[\hat y^{(\ell,m)}_t(i \!\leftarrow\! k)] - E^{(\ell,m)}[\hat y^{(\ell,m)}_t]).
-$$
-
-$$
-\frac{\partial \mathbb{E}[\mathcal{L}]}{\partial \mathbf{logits}^{(\ell,m)}_{i,v}} = p^{(\ell,m)}_{i,v} \Big( \Delta L_i^{(\ell,m)}(v) - \sum_{k} p^{(\ell,m)}_{i,k} \Delta L_i^{(\ell,m)}(k) \Big).
-$$
-
-$$
-\frac{\partial \mathcal{L}}{\partial W_{\rm lm}^{(\ell,m)}} = (u^{(\ell)})^\top \frac{\partial \mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \quad \frac{\partial \mathcal{L}}{\partial E^{(\ell,m)}[r]} = \frac{1}{M} \sum_t \mathbf{1}\{\hat y^{(\ell,m)}_t = r\} g^{(\ell)}_t.
-$$
-
 ---
 
 ## Update · 2025-10-15
@@ -101,47 +87,6 @@ $$
 - **ROSA fix** — strict *retrieve-then-commit* SAM with rightmost tracking ensures **longest and latest** matches.
 
 
-
-$$
-\mathbf{logits}^{(\ell,m)} = W_{\mathrm{lm}}^{(\ell,m)}\,u^{(\ell)}, \quad
-z^{(\ell,m)}=\arg\max \mathbf{logits}^{(\ell,m)}, \quad
-y^{(\ell,m)}=\mathrm{ROSA}_{\mathrm{collapse}}(z^{(\ell,m)})
-$$
-
-$$
-v^{(\ell)}=\frac{1}{M}\sum_{m=1}^{M} E^{(\ell,m)}[y^{(\ell,m)}+1], \quad
-g^{(\ell)}=\frac{\partial\mathcal{L}}{\partial v^{(\ell)}}
-$$
-
-$$
-S^{(\ell,m)}_{t,k}=(g^{(\ell)}_t)^\top E^{(\ell,m)}[k], \quad
-\Delta L^{(\ell,m)}_{i}(c)=
-\sum_{t\in S^{(\ell,m)}_{i}(c)} \left(
-S^{(\ell,m)}_{t,\,\hat{y}(i\leftarrow c)+1}-S^{(\ell,m)}_{t,\,\hat{y}+1}
-\right)
-$$
-
-$$
-\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}_{i,c}}
-= p^{(\ell,m)}_{i,c}\left(
-\Delta L^{(\ell,m)}_{i}(c)
--\sum_{k} p^{(\ell,m)}_{i,k}\,\Delta L^{(\ell,m)}_{i}(k)
-\right)
-$$
-
-$$
-\frac{\partial\mathcal{L}}{\partial W_{\mathrm{lm}}^{(\ell,m)}}
-= (u^{(\ell)})^\top
-\frac{\partial\mathcal{L}}{\partial \mathbf{logits}^{(\ell,m)}}, \quad
-\frac{\partial\mathcal{L}}{\partial E^{(\ell,m)}[r]}
-= \frac{1}{M}\sum_{t}\mathbb{1}\{\hat{y}^{(\ell,m)}_t=r\}\,g^{(\ell)}_t
-$$
-
-$$
-\mathcal{C}(1,1,1,2,2,3)=(1,2,3), \quad
-y_t=\mathrm{nextdiff}(\mathrm{SAM}(\mathcal{C}(z_{<t>})))
-$$
-
 ---
 
 ## Update · 2025-10-16
@@ -149,18 +94,15 @@ $$
 - Added code to enable the model to load ROSA-related files and perform inference.
 - Added a high-speed C++ kernel and several other optimizations, achieving a 2× speedup.
 
-
-
-
-$$u = \mathrm{LN}(h + v)$$
-$$\tilde{h} = h + \mathrm{Attn}_{\text{win}}(u)$$
-$$h^{+} = \tilde{h} + \mathrm{MLP}\big(\mathrm{LN}(\tilde{h})\big)$$
-
 ---
 
-## Update · 2025-10-18
+## Update · 2025-10-20
 
-GPU resources have been tight lately, so I haven’t been able to get any allocation. I’ll focus on optimizing and updating the code this week, and plan to run larger-scale experiments once resources free up next week.
+- The fusion method of Rosa has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
+
+- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the Rosa module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by Rosa-tuning to one-eighth of the original, while achieving better performance.
+
+- The QKV-Rosa module is currently under development. Most of the core code has been completed, and we are now addressing the backpropagation issue for the K head. The update is expected to be released tomorrow or the day after.
 
 ---
 

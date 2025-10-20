@@ -33,7 +33,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 
 ROSA enables windowed attention to outperform the global attention baseline.
 
-In our experiments, Rosa-tuning demonstrates even greater advantages on 32k and longer sequences. Here, we only present the 16k test results, but you are welcome to explore other configurations if interested.
+In our experiments, ROSA-Tuning demonstrates even greater advantages on 32k and longer sequences. Here, we only present the 16k test results, but you are welcome to explore other configurations if interested.
 
 ---
 
@@ -74,11 +74,11 @@ $$
 
 ## Update · 2025-10-20
 
-- The fusion method of Rosa has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
+- The fusion method of ROSA has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
 
-- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the Rosa module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by Rosa-tuning to one-eighth of the original, while achieving better performance.
+- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the Rosa module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by ROSA-Tuning to one-eighth of the original, while achieving better performance.
 
-- The QKV-Rosa module is currently under development. Most of the core code has been completed, and we are now addressing the backpropagation issue for the K head. The update is expected to be released tomorrow or the day after.
+- The QKV-ROSA module is currently under development. Most of the core code has been completed, and we are now addressing the backpropagation issue for the K head. The update is expected to be released tomorrow or the day after.
 
 ---
 

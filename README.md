@@ -72,12 +72,20 @@ $$
 
 ---
 
-## Update · 2025-10-14
+## Update · 2025-10-20
 
-- Added **multi-route ROSA**: each layer has M independent routes $\{W_{lm}^{(\ell,m)}, E^{(\ell,m)}\}$; injected as the mean of all routes.  
-- Removed all temperature and scaling factors; fully hard forward path.  
-- Replaced STE with **Local Counterfactual Gradient (LCG)**; CPU computes $\Delta L_i(k)$ by "change-one-token" simulation and writes position-wise contrastive gradients to logits.  
+- The fusion method of Rosa has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
 
+- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the Rosa module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by Rosa-tuning to one-eighth of the original, while achieving better performance.
+
+- The QKV-Rosa module is currently under development. Most of the core code has been completed, and we are now addressing the backpropagation issue for the K head. The update is expected to be released tomorrow or the day after.
+
+---
+
+## Update · 2025-10-16
+- Added a new ROSA fusion method `pre_attn`, which injects ROSA representations before the attention layer, allowing the window attention to operate directly in the $(h + v)$ space.  Currently, its performance is slightly worse than that of `post_attn`.  
+- Added code to enable the model to load ROSA-related files and perform inference.
+- Added a high-speed C++ kernel and several other optimizations, achieving a 2× speedup.
 
 ---
 
@@ -89,20 +97,12 @@ $$
 
 ---
 
-## Update · 2025-10-16
-- Added a new ROSA fusion method `pre_attn`, which injects ROSA representations before the attention layer, allowing the window attention to operate directly in the $(h + v)$ space.  Currently, its performance is slightly worse than that of `post_attn`.  
-- Added code to enable the model to load ROSA-related files and perform inference.
-- Added a high-speed C++ kernel and several other optimizations, achieving a 2× speedup.
+## Update · 2025-10-14
 
----
+- Added **multi-route ROSA**: each layer has M independent routes $\{W_{lm}^{(\ell,m)}, E^{(\ell,m)}\}$; injected as the mean of all routes.  
+- Removed all temperature and scaling factors; fully hard forward path.  
+- Replaced STE with **Local Counterfactual Gradient (LCG)**; CPU computes $\Delta L_i(k)$ by "change-one-token" simulation and writes position-wise contrastive gradients to logits.  
 
-## Update · 2025-10-20
-
-- The fusion method of Rosa has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
-
-- The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the Rosa module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by Rosa-tuning to one-eighth of the original, while achieving better performance.
-
-- The QKV-Rosa module is currently under development. Most of the core code has been completed, and we are now addressing the backpropagation issue for the K head. The update is expected to be released tomorrow or the day after.
 
 ---
 

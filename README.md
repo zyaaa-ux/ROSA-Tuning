@@ -76,7 +76,7 @@ $$
 
 - We attempted to add rosa_emb(token_id) to the first layer of the model and tested two schemes: one where it is added to the original word embedding before participating in attention computation (emb_sun), and another where it is added to the residual connection after attention (attn_plus). Currently, attn_plus performs better.
 
-- We use an improved QKV-ROSA method to avoid the “matching being matched” issue and enhance flexibility. This method matches the q sequence with the k sequence to generate the v sequence, focusing on questions such as “which query token is most useful at the moment”, “which token can carry more valuable routing”, and “which embedding row should be selected when being routed”. Gradients are obtained through perturbation.
+- We use an improved QKV-ROSA method to avoid the “matching being matched” issue and enhance flexibility. This method matches the q sequence with the k sequence to generate the v sequence, respectively focusing on “which query token is most useful at the moment”, “which token can carry more valuable routing”, and “which embedding row should be selected when being routed”. Gradients are obtained through perturbation.
 
 - On the PG-19 task, QKV-ROSA did not significantly outperform the original ROSA, but it has stronger theoretical expressive power.
 

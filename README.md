@@ -78,7 +78,7 @@ $$
 
 - We use an improved QKV-ROSA method to avoid the “matching being matched” issue and enhance flexibility. This method matches the q sequence with the k sequence to generate the v sequence, respectively focusing on “which query token is most useful at the moment”, “which token can carry more valuable routing”, and “which embedding row should be selected when being routed”. Gradients are obtained through perturbation.
 
-- On the PG-19 task, QKV-ROSA did not significantly outperform the original ROSA, but it has stronger theoretical expressive power.
+- On the PG-19 task, QKV-ROSA does not significantly outperform the original ROSA. However, from a theoretical perspective, QKV-ROSA possesses greater expressive power, as the original ROSA can be viewed as a constrained version of QKV-ROSA where Q=K=V.
 
 - This project mainly focuses on reproducing and exploring the application of the Bo's method. We express our gratitude to Bo for their open-source spirit and contributions to the AI field.
 

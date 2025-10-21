@@ -74,7 +74,7 @@ $$
 
 ## Update · 2025-10-20
 
-- The fusion method of ROSA has been finalized as “pre-attn”, and a new time_shift mechanism has been introduced to assist feature fusion.
+- The fusion method of ROSA has been finalized as “pre-attn”, and a time_shift mechanism has been introduced to assist feature fusion.
 
 - The logic related to the quantization head has been revised: each classification head now processes only part of the dimensions, and the output of the ROSA module is formed by concatenating the embeddings corresponding to the IDs output from all classification heads. This approach reduces the number of additional parameters introduced by ROSA-Tuning to one-eighth of the original, while achieving better performance.
 

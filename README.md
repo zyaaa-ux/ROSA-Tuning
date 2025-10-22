@@ -75,7 +75,7 @@ $$
 
 ## Update · 2025-10-22
 
-- We have fixed several critical bugs and logical errors in QKV-ROSA discovered yesterday, along with optimizing the overall codebase. The latest version of QKV-ROSA now runs faster while delivering significantly improved performance.
+- We have fixed several critical bugs and logical errors in QKV-ROSA yesterday, along with optimizing the overall codebase. The latest version of QKV-ROSA now runs faster while delivering significantly improved performance.
 
 - The vocab sizes of QK and V have been decoupled, allowing you to configure them independently.
 

@@ -30,6 +30,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 | Windowed Attention + ROSA (2025.10.14) | 20.01 |
 | Windowed Attention + ROSA (2025.10.15) | 19.93 |
 | Windowed Attention + ROSA (2025.10.20, 1/8 parameters) | 19.82 |
+| Windowed Attention + ROSA (2025.10.22) | 19.63 |
 
 ROSA enables windowed attention to outperform the global attention baseline.
 
@@ -69,6 +70,17 @@ v^{(\ell)}_{\text{soft}} &= p^{(\ell)}\,\mathrm{Emb}^{(\ell)}[1:],\\
 v^{(\ell)} &= v^{(\ell)}_{\text{hard}} + \mathrm{sg}(v^{(\ell)}_{\text{soft}} - v^{(\ell)}_{\text{hard}})
 \end{aligned}
 $$
+
+---
+
+## Update · 2025-10-22
+
+- We have fixed several critical bugs and logical errors in QKV-ROSA discovered yesterday, along with optimizing the overall codebase. The latest version of QKV-ROSA now runs faster while delivering significantly improved performance.
+
+- The vocab sizes of QK and V have been decoupled, allowing you to configure them independently.
+
+- The core logic of ROSA-Tuning is now relatively complete, and we’ll begin conducting more rigorous and diverse experimental validations. Some results and related code will continue to be updated.
+
 
 ---
 

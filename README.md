@@ -2,7 +2,7 @@
 
 ## What is ROSA-Tuning
 
-ROSA is a non-neural memory mechanism running on CPUs, capable of achieving perfect recall and precise matching over infinitely long contexts.
+ROSA(RWKV Online Suffix Automation) is a non-neural memory mechanism running on CPUs, capable of achieving perfect recall and precise matching over infinitely long contexts.
 
 ROSA-Tuning integrates this mechanism with modern large language models, enabling them to handle arbitrarily long inputs using only a fixed-length attention window, while achieving better performance than full global attention.
 
@@ -124,6 +124,8 @@ Original ROSA discussion: [https://github.com/BlinkDL/RWKV-LM/tree/main/RWKV-v8]
 
 
 Proposes using Suffix Automaton for neurosymbolic infinite-range, lossless information propagation in LLMs as a memory/retrieval channel beyond attention.
+
+- This project mainly focuses on reproducing and exploring the application of the Bo's method. We express our gratitude to Bo for their open-source spirit and contributions to the AI field.
 
 > Bo is great, no need to say more.
 

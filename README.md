@@ -125,7 +125,7 @@ Original ROSA discussion: [https://github.com/BlinkDL/RWKV-LM/tree/main/RWKV-v8]
 
 Proposes using Suffix Automaton for neurosymbolic infinite-range, lossless information propagation in LLMs as a memory/retrieval channel beyond attention.
 
-- This project mainly focuses on reproducing and exploring the application of the Bo's method. We express our gratitude to Bo for their open-source spirit and contributions to the AI field.
+This project mainly focuses on reproducing and exploring the application of the Bo's method. We express our gratitude to Bo for their open-source spirit and contributions to the AI field.
 
 > Bo is great, no need to say more.
 

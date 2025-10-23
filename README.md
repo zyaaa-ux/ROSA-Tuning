@@ -149,4 +149,3 @@ More detailed experiments, hardware optimizations, more powerful ROSA-Tuning met
 
 Additionally, this project will release new ROSA-Tuning methods daily in the coming days. Stay tuned.
 
-License: MIT

@@ -73,7 +73,7 @@ $$
 
 ## Update · 2025-10-23
 
-Updated the RWKV7 + ROSA integration code with two fusion modes: pre, replacing x_pre in timeshift with ROSA’s LN output, and post, running ROSA in parallel with rwkv_tmix.
+- Updated the RWKV7 + ROSA integration code with two fusion modes: pre_tmix, replacing x_pre in timeshift with ROSA’s LN output, and post_tmix, running ROSA in parallel with rwkv_tmix.
 
 
 ---

@@ -301,3 +301,4 @@ def build_rwkv7_optimizer_params(model: nn.Module):
 
 # patch_rwkv7_with_rosa(model)
 
+# This code is just a conceptual example, you'll need to make some modifications if you want to run it.

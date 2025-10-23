@@ -148,3 +148,5 @@ This project mainly focuses on reproducing and exploring the application of the 
 More detailed experiments, hardware optimizations, more powerful ROSA-Tuning methods, and related papers will be released soon.  
 
 Additionally, this project will release new ROSA-Tuning methods daily in the coming days. Stay tuned.
+
+License: MIT

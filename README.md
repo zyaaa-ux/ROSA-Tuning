@@ -71,6 +71,11 @@ v^{(\ell)} &= v^{(\ell)}_{\text{hard}} + \mathrm{sg}(v^{(\ell)}_{\text{soft}} - 
 \end{aligned}
 $$
 
+## Update · 2025-10-23
+
+Updated the RWKV7 + ROSA integration code with two fusion modes: pre, replacing x_pre in timeshift with ROSA’s LN output, and post, running ROSA in parallel with rwkv_tmix.
+
+
 ---
 
 ## Update · 2025-10-22

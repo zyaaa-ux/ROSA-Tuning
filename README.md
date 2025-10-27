@@ -77,7 +77,7 @@ $$
 
 - The implementation of QKV-ROSA has been further optimized, the computational logic remains exactly the same, but the execution speed is now faster.
 
-- A pure GPU version of QKV-ROSA has been added; however, it runs significantly slower than the CPU version on long sequences. This is because ROSA itself involves almost no arithmetic computation but relies heavily on multi-core sequence matching. The GPU version is mainly intended to help illustrate the underlying principles of ROSA.
+- A pure GPU version of QKV-ROSA(Referenced https://github.com/wjie98/rosa_soft) has been added; however, it runs significantly slower than the CPU version on long sequences. This is because ROSA itself involves almost no arithmetic computation but relies heavily on multi-core sequence matching. The GPU version is mainly intended to help illustrate the underlying principles of ROSA.
 
 - Due to limited computational resources, long-text experiments have not yet started. They are expected to begin after this week’s training, with evaluations on LongBench. I’m also collecting your suggested training–testing dataset pairs (please provide both together) in the issue thread — they can be from text, image, or any other modality. If time permits, I’ll run tests using ROSA-Tuning on them.
 

@@ -73,6 +73,16 @@ $$
 
 ---
 
+## Update · 2025-10-31
+
+- In this week’s comprehensive experiments, we found that the previous ROSA-Tuning performed exceptionally well on seen data categories (e.g., training and testing on the same dataset). However, its performance dropped significantly on unseen tasks (such as LongBench), showing only a marginal advantage over window attention. After thorough analysis and discussion, we attributed this issue to the inherent generalization limitation of the discretization structure.
+
+- Through theoretical analysis and extensive exploration of different discretization strategies, we identified a method that achieves a strong balance between performance and generalization — Bo’s bit-based discretization approach.
+
+- Some have compared ROSA to VQ-Transformer, but this is incorrect. ROSA is built upon three core components: discretization (bitization), matching (suffix automaton), and training (perturbation). All three are fundamentally different from those in VQ-Transformer. Moreover, ROSA’s technology is significantly more advanced, with its bitization method demonstrating far superior performance and generalization compared to VQ.
+
+---
+
 ## Update · 2025-10-27
 
 - The implementation of QKV-ROSA has been further optimized, the computational logic remains exactly the same, but the execution speed is now faster.

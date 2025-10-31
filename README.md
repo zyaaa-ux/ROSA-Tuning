@@ -31,6 +31,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 | Windowed Attention + ROSA (2025.10.15) | 19.93 |
 | Windowed Attention + ROSA (2025.10.20, 1/8 parameters) | 19.82 |
 | Windowed Attention + ROSA (2025.10.22) | 19.63 |
+| Windowed Attention + ROSA (2025.10.31) | 19.06 |
 
 ROSA enables windowed attention to outperform the global attention baseline.
 

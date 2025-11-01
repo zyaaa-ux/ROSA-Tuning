@@ -80,7 +80,7 @@ $$
 
 - Through theoretical analysis and extensive exploration of different discretization strategies, we identified a method that achieves a strong balance between performance and generalization — Bo’s bit-based discretization approach.
 
-- Some have compared ROSA to VQ-Transformer, but this is incorrect. ROSA is built upon three core components: discretization (bitization), matching (suffix automaton), and training (perturbation). All three are fundamentally different from those in VQ-Transformer. Moreover, ROSA’s technology is significantly more advanced, with its bitization method demonstrating far superior performance and generalization compared to VQ.
+- Some have compared ROSA to Transformer-VQ, but this is incorrect. ROSA is built upon three core components: discretization (bitization), matching (suffix automaton), and training (perturbation). All three are fundamentally different from those in Transformer-VQ. Moreover, ROSA’s technology is significantly more advanced, with its bitization method demonstrating far superior performance and generalization compared to Transformer-VQ.
 
 ---
 

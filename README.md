@@ -50,27 +50,88 @@ In our experiments, ROSA-Tuning demonstrates even greater advantages on 32k and 
 
 ## Method Overview
 
-### Core Formula
-
-For the $\ell$-th layer hidden representation $h^{(\ell)} \in \mathbb{R}^{T\times d}$:
+For layer $l$ with hidden $h^{(l)} \in \mathbb{R}^{T \times C}$ where $C = R \cdot M$:
 
 $$
-h^{(\ell+1)} = h^{(\ell)} + \mathrm{Attn}^{(\ell)}_{\text{win}}(\mathrm{LN}(h^{(\ell)})) + v^{(\ell)} + \mathrm{MLP}^{(\ell)}(\mathrm{LN}(\cdot))
+h^{(l+1)} = h^{(l)} + \text{Attn}^{(l)}_{\text{win}}(\text{LN}(h^{(l)})) + \text{ROSA}^{(l)}(h^{(l)}) + \text{MLP}^{(l)}(\text{LN}(\cdot))
 $$
 
-The ROSA branch $v^{(\ell)}$ is computed as:
+$$
+R = \frac{C}{M}, \quad K = 2^M, \quad b^{X}_{b,t,c} = \mathbf{1}[x^{X}_{b,t,c} > 0], \quad a^{X}_{b,t,r} = \sum_{m=0}^{M-1} b^{X}_{b,t,(r,m)} \cdot 2^m, \quad X \in \{Q, K, V\}
+$$
 
 $$
-\begin{aligned}
-\textbf{logits}^{(\ell)} &= W_{\rm lm}^{(\ell)}\,\mathrm{LN}(h^{(\ell)}) \in \mathbb{R}^{T\times K_\ell}, \\
-z^{(\ell)} &= \arg\max(\textbf{logits}^{(\ell)}) \in \{0,\ldots,K_\ell-1\}^T,\\
-y^{(\ell)} &= \mathrm{ROSA}_{\text{collapse}}(z^{(\ell)}) \in \{-1,0,\ldots,K_\ell-1\}^T,\\
-p^{(\ell)} &= \mathrm{softmax}(\textbf{logits}^{(\ell)}/\tau_\ell),\\
-v^{(\ell)}_{\text{hard}} &= \mathrm{Emb}^{(\ell)}[y^{(\ell)}+1],\\
-v^{(\ell)}_{\text{soft}} &= p^{(\ell)}\,\mathrm{Emb}^{(\ell)}[1:],\\
-v^{(\ell)} &= v^{(\ell)}_{\text{hard}} + \mathrm{sg}(v^{(\ell)}_{\text{soft}} - v^{(\ell)}_{\text{hard}})
-\end{aligned}
+s_0 = 0, \; \text{sym}_0 = a^{K}_{b,0,r}, \qquad a^{K}_{b,t,r} \neq a^{K}_{b,t-1,r} \Rightarrow s_{l+1} = t, \; \text{sym}_{l+1} = a^{K}_{b,t,r}
 $$
+
+$$
+\text{rcap}(t) = \max \{ l \mid s_l \le t \}
+$$
+
+$$
+ns = \mathrm{match\_next}(s, x), \quad rpos = e[ns], \quad nxt = rpos + 1
+$$
+
+$$
+\tau_{b,r,t} = \begin{cases}
+s_{nxt}, & \text{if match success and } nxt \le \text{rcap}(t), \\
+-1, & \text{otherwise}
+\end{cases}
+$$
+
+For Q-run first symbol $a$ and bit $j$:
+
+$$
+a^{(j,0)} = a \wedge \neg(1 \ll j), \qquad a^{(j,1)} = a \vee (1 \ll j)
+$$
+
+$$
+\tau^{(j,b)} = \begin{cases}
+s_{nxt^{(j,b)}}, & \text{if match success}, \\
+-1, & \text{otherwise}
+\end{cases}
+$$
+
+$$
+\Delta = \text{Emb}_1 - \text{Emb}_0, \qquad y_{b,t,c} = \mathbf{1}[\tau \ge 0] \cdot \left(\text{Emb}_0[c] + \Delta[c] \cdot \mathbf{1}[v_{b,\tau,r,m} > 0]\right)
+$$
+
+$$
+\text{ROSA}^{(l)}(h) = \text{Linear}(y)
+$$
+
+$$
+p^{Q} = \sigma(T_Q q), \qquad p^{K} = \sigma(T_K k), \qquad p^{V} = \sigma(T_V v)
+$$
+
+$$
+\theta_{b,t,c} = \frac{\partial \mathcal{L}}{\partial y_{b,t,c}} \cdot \Delta[c], \quad \theta_{b,t,r,m} \text{ is reshape of } \theta_{b,t,c}
+$$
+
+$$
+S^{V}_{b,r,\tau,m} = \sum_{t: \tau_{b,r,t} = \tau} \theta_{b,t,r,m}, \qquad \frac{\partial \mathcal{L}}{\partial v_{b,t,r,m}} = p^{V}_{b,t,r,m}(1 - p^{V}_{b,t,r,m}) S^{V}_{b,r,t,m}
+$$
+
+Let $\mathcal{V}^{Q}_{b,r,\tau,m} \in \{\mathbf{1}[v > 0], p^{V}\}$:
+
+$$
+d^{(j)}_{b,t,r} = \sum_{m} \theta_{b,t,r,m} \left(\mathcal{V}^{Q}_{b,r,\tau^{(j,1)},m} - \mathcal{V}^{Q}_{b,r,\tau^{(j,0)},m}\right)
+$$
+
+$$
+\frac{\partial \mathcal{L}}{\partial q_{b,t,r,j}} = p^{Q}_{b,t,r,j}(1 - p^{Q}_{b,t,r,j}) d^{(j)}_{b,t,r}
+$$
+
+Let $\mathcal{V}^{K}_{b,r,\tau,m} = \mathbf{1}[v_{b,\tau,r,m} > 0]$:
+
+$$
+U^{(b)}_{b,r,l,j} = \sum_{t} \sum_{m} \theta_{b,t,r,m} \mathcal{V}^{K,(b)}_{b,r,s_l,m}, \quad \Delta U_{b,r,l,j} = U^{(1)}_{b,r,l,j} - U^{(0)}_{b,r,l,j}
+$$
+
+$$
+\frac{\partial \mathcal{L}}{\partial k_{b,s_l,r,j}} = p^{K}_{b,s_l,r,j}(1 - p^{K}_{b,s_l,r,j}) \Delta U_{b,r,l,j}, \qquad \frac{\partial \mathcal{L}}{\partial k_{b,t \neq s_l,r,j}} = 0
+$$
+
 
 ---
 

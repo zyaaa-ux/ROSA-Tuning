@@ -112,7 +112,7 @@ $$
 S^{V}_{b,r,\tau,m} = \sum_{t: \tau_{b,r,t} = \tau} \theta_{b,t,r,m}, \qquad \frac{\partial \mathcal{L}}{\partial v_{b,t,r,m}} = p^{V}_{b,t,r,m}(1 - p^{V}_{b,t,r,m}) S^{V}_{b,r,t,m}
 $$
 
-Let $\mathcal{V}^{K}_{b,r,\tau,m} = \mathbf{1}[v_{b,\tau,r,m} > 0]$:
+Let $\mathcal{V}^{Q}_{b,r,\tau,m} \in \{\mathbf{1}[v > 0], p^{V}\}$:
 
 $$
 d^{(j)}_{b,t,r} = \sum_{m} \theta_{b,t,r,m} \left(\mathcal{V}^{Q}_{b,r,\tau^{(j,1)},m} - \mathcal{V}^{Q}_{b,r,\tau^{(j,0)},m}\right)

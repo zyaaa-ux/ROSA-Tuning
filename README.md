@@ -48,7 +48,7 @@ In our experiments, ROSA-Tuning demonstrates even greater advantages on 32k and 
 
 ---
 
-## Method Overview
+## Method Overview · 2025-10-31
 
 For layer $l$ with hidden $h^{(l)} \in \mathbb{R}^{T \times C}$ where $C = R \cdot M$:
 

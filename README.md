@@ -74,6 +74,14 @@ $$
 
 ---
 
+## Update · 2025-11-4
+
+- Fixed a minor bug in the previous implementation of gradient backpropagation.
+
+- More detailed and comprehensive experiments are currently underway.
+
+---
+
 ## Update · 2025-10-31
 
 - In this week’s comprehensive experiments, we found that the previous ROSA-Tuning performed exceptionally well on seen data categories (e.g., training and testing on the same dataset). However, its performance dropped significantly on unseen tasks (such as LongBench), showing only a marginal advantage over window attention. After thorough analysis and discussion, we attributed this issue to the inherent generalization limitation of the discretization structure.

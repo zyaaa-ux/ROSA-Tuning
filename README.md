@@ -122,7 +122,6 @@ $$
 \frac{\partial \mathcal{L}}{\partial q_{b,t,r,j}} = p^{Q}_{b,t,r,j}(1 - p^{Q}_{b,t,r,j}) d^{(j)}_{b,t,r}
 $$
 
-Let $\mathcal{V}^{K}_{b,r,\tau,m} = \mathbf{1}[v_{b,\tau,r,m} > 0]$:
 
 $$
 U^{(b)}_{b,r,l,j} = \sum_{t} \sum_{m} \theta_{b,t,r,m} \mathcal{V}^{K,(b)}_{b,r,s_l,m}, \quad \Delta U_{b,r,l,j} = U^{(1)}_{b,r,l,j} - U^{(0)}_{b,r,l,j}

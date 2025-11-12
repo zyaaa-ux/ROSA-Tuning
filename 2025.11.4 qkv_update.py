@@ -74,11 +74,7 @@ FIRST_GLOBAL_LAYERS = 0
 
 LCG_POS_SUBSAMPLE: float = 0.0
 
-
-
 ROSA_Q_CONTRAST_USE_V_PROB: int = int(os.environ.get("ROSA_Q_CONTRAST_USE_V_PROB", 0))
-
-
 
 BITS_PER_ROUTE: int = int(os.environ.get("ROSA_BITS_PER_ROUTE", 0))
 assert BITS_PER_ROUTE >= 1, "ROSA_BITS_PER_ROUTE must be >=1"
@@ -89,13 +85,9 @@ BINARY_TEMP_V: float = float(os.environ.get("BINARY_TEMP_V", 0.0))
 
 LCG_POS_SUBSAMPLE: float = float(os.environ.get("LCG_POS_SUBSAMPLE", LCG_POS_SUBSAMPLE))
 
-
-
 ROSA_NUMBA_THREADS: int = 0
 ROSA_ENABLE_NUMBA_PARALLEL: bool = True
 ROSA_THREAD_WORKERS: int = 0
-
-
 
 WEIGHT_DECAY = 0.0
 NUM_EPOCHS = 0
@@ -125,7 +117,7 @@ STAGE_B_WARMUP_STEPS    = 0
 SAVE_STEPS_STAGE_B      = 0
 EVAL_STEPS_STAGE_B      = 0
 
-STAGE_B_ENABLE_GC       = False
+STAGE_B_ENABLE_GC       = True
 STAGE_B_LCG_POS_SUBSAMPLE = 0.0
 
 
@@ -192,8 +184,6 @@ import numpy as _np
 import torch
 
 
-
-
 class _PinnedBufferPool:
     def __init__(self):
         self._pool = {}
@@ -207,9 +197,6 @@ class _PinnedBufferPool:
         return t
 
 _PINNED_POOL = _PinnedBufferPool()
-
-
-
 
 
 if _NUMBA_OK:
@@ -304,10 +291,6 @@ if _NUMBA_OK:
         last_arr[0] = cur
 
 
-
-
-
-
 if _NUMBA_OK:
     @(_nb.njit(cache=True, fastmath=False, inline='always'))
     def _sam_match_next_from_nb(next_arr, link, s, x):
@@ -345,7 +328,6 @@ if _NUMBA_OK:
                     last = x
             c_len_br[b, r] = clen
         return run_start_brt, run_sym_brt, c_len_br
-
 
 
 if _NUMBA_OK:
@@ -830,9 +812,6 @@ class MultiRouteBinaryROSAFunction(torch.autograd.Function):
         return grad_y_out, grad_q, grad_k, grad_v, None, None, None, None, None, None, None
 
 
-
-
-
 from dataclasses import dataclass
 from typing import List, Dict, Any
 import torch
@@ -851,7 +830,7 @@ class FixedLenLMCollator:
         for c in cols:
             if c not in first:
                 raise KeyError(
-                    f"Sample missing column '{c}'. Expected columns: {cols}."
+                    f"Sample missing column '{c}'. This collator expects samples to contain {cols}."
                 )
 
         batch: Dict[str, torch.Tensor] = {}
@@ -862,7 +841,6 @@ class FixedLenLMCollator:
             else:
                 batch[c] = torch.tensor(xs)
         return batch
-
 
 
 import os
@@ -1011,10 +989,8 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
             delta = (self.rosa_e1 - self.rosa_e0)
             y_valid = self.rosa_e0.view(1, 1, C) + delta.view(1, 1, C) * b_bits_btc.to(delta.dtype)
 
-
             valid_mask_btc = valid_dest_brt.permute(0, 2, 1).unsqueeze(-1).expand(B, T, R, BITS_PER_ROUTE).reshape(B, T, C)
             y_final = y_valid * valid_mask_btc.to(y_valid.dtype)
-
 
             pos_mask_cpu = None
             if LCG_POS_SUBSAMPLE < 1.0:
@@ -1064,7 +1040,7 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
         layer.forward = _forward_qkv_brosa.__get__(layer, Qwen3DecoderLayer)
 
     meta = {
-        "apply_layers_from": 1,
+        "apply_layers_from": 0,
         "bits_per_route": BITS_PER_ROUTE,
         "num_routes": R,
         "k_symbols": K_sym,
@@ -1075,13 +1051,11 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
 
-
-
-
-
 def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
     config = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
     config.sliding_window = ATTN_WINDOW
+    config.tie_word_embeddings = False
+
     config.max_window_layers = FIRST_GLOBAL_LAYERS
     if (not hasattr(config, "layer_types")) or (config.layer_types is None):
         config.layer_types = [
@@ -1089,9 +1063,9 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
             for i in range(config.num_hidden_layers)
         ]
     if hasattr(config, "attn_implementation"):
-        config.attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+        config.attn_implementation = "" if USE_FLASH_ATTN else ""
     else:
-        config._attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+        config._attn_implementation = "" if USE_FLASH_ATTN else ""
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_DIR, use_fast=True)
     model = Qwen3ForCausalLM.from_pretrained(
@@ -1100,7 +1074,7 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
         torch_dtype=torch.bfloat16 if BF16 else torch.float16,
         low_cpu_mem_usage=True,
     )
-
+    
     model.config.use_cache = False
     patch_qwen3_with_multiroute_rosa(model)
 
@@ -1168,7 +1142,7 @@ def save_meta(model: Qwen3ForCausalLM, out_dir: str):
         "attn_window": ATTN_WINDOW,
         "first_global_layers": FIRST_GLOBAL_LAYERS,
         "rosa": {
-            "type": "binary",
+            "type": "",
             "bits_per_route": int(BITS_PER_ROUTE),
             "temperature": {
                 "q": float(BINARY_TEMP_Q),
@@ -1273,7 +1247,7 @@ class TwoStageSwitchCallback(TrainerCallback):
         self.switch_step = None
 
     def _tokens_per_update(self, args) -> int:
-        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        world_size = int(os.environ.get("WORLD_SIZE", ""))
         return int(SEQ_LEN) * int(args.per_device_train_batch_size) * int(args.gradient_accumulation_steps) * world_size
 
     def on_train_begin(self, args, state, control, model=None, **kwargs):
@@ -1357,10 +1331,6 @@ class TwoStageSwitchCallback(TrainerCallback):
         return control
 
 
-
-
-
-
 def is_main_process() -> bool:
     return _env_int("RANK", 0) == 0
 
@@ -1384,13 +1354,11 @@ class RosaZeroRowCallback(TrainerCallback):
         return control
 
 
-
 def main():
     set_seed(SEED)
 
     raw = load_from_disk(DATASET_DIR)
     train_ds = raw["train"]
-    test_ds = raw['test']
 
     model, tokenizer = build_model_and_tokenizer()
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
@@ -1400,27 +1368,27 @@ def main():
         output_dir=OUTPUT_DIR,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=PER_DEVICE_TRAIN_BSZ,
-        per_device_eval_batch_size=1,
+        per_device_eval_batch_size=0,
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
 
         learning_rate=STAGE_A_LR_ROSA,
 
-        lr_scheduler_type="constant_with_warmup",
+        lr_scheduler_type="",
         warmup_steps=STAGE_A_WARMUP_STEPS,
 
         logging_steps=LOGGING_STEPS,
         eval_steps=EVAL_STEPS_STAGE_A,
         save_strategy=SAVE_STRATEGY,
         save_steps=SAVE_STEPS_STAGE_A,
-        report_to="none",
+        report_to="",
         fp16=(not BF16) and torch.cuda.is_available(),
         bf16=BF16,
-        dataloader_num_workers=2,
+        dataloader_num_workers=0,
         gradient_checkpointing=GRADIENT_CHECKPOINTING,
         remove_unused_columns=False,
         ddp_find_unused_parameters=False,
-        ddp_bucket_cap_mb=16,
-        optim="adamw_torch",
+        ddp_bucket_cap_mb=0,
+        optim="",
     )
 
     optimizer_params = build_optimizer_params(model)
@@ -1428,23 +1396,25 @@ def main():
     class _Trainer(Trainer):
         def create_optimizer(self):
             if self.optimizer is None:
-                self.optimizer = torch.optim.AdamW(optimizer_params, betas=(0.9, 0.98), eps=1e-8)
+                self.optimizer = torch.optim.AdamW(optimizer_params, betas=(0.0, 0.0), eps=0.0)
             return self.optimizer
 
     trainer = _Trainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
-        eval_dataset=test_ds,
         data_collator=data_collator,
         tokenizer=tokenizer,
         callbacks=[RosaZeroRowCallback(), TwoStageSwitchCallback()],
     )
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params:,}")
+    print(f"Total trainable parameters: {total_params:,}")
 
-    trainer.train()
+    from transformers.trainer_utils import get_last_checkpoint
+
+    last_ckpt = get_last_checkpoint(OUTPUT_DIR)
+    trainer.train(resume_from_checkpoint=last_ckpt)
 
     if is_main_process():
         save_meta(model, OUTPUT_DIR)

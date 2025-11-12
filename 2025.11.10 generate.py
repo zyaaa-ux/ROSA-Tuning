@@ -34,7 +34,6 @@ ROSA_THREAD_WORKERS: int = 0
 
 SEED: int = 0
 
-
 import os
 import json
 import time
@@ -69,7 +68,6 @@ try:
 except Exception:
     _NUMBA_OK = False
 
-
 import os
 import numpy as np
 
@@ -79,10 +77,10 @@ try:
 except Exception:
     _NUMBA_OK = False
 
-
 from concurrent.futures import ThreadPoolExecutor
 _ROSA_THREAD_POOL = None
 _ROSA_THREAD_POOL_PID = None
+
 def _get_rosa_thread_pool():
     global _ROSA_THREAD_POOL, _ROSA_THREAD_POOL_PID
     n_workers = int(ROSA_THREAD_WORKERS)
@@ -143,7 +141,6 @@ if _NUMBA_OK:
         while p != -1 and next_arr[p, x] == -1:
             p = link[p]
         return -1 if p == -1 else next_arr[p, x]
-
 
 if _NUMBA_OK:
     @nb.njit(cache=True, fastmath=False, inline='always')
@@ -257,15 +254,14 @@ if _NUMBA_OK:
 
         return out_bits, out_valid
 
-
 import torch
 
 class _BrosaOnlineEngineNB:
     def __init__(self, B: int, R: int, J: int, K: int):
         self.B = int(B); self.R = int(R); self.J = int(J); self.K = int(K)
         self.N = int(B*R)
-        self._cap_runs  = 0
-        self._cap_state = 0
+        self._cap_runs  = 1024
+        self._cap_state = 2048
         self._alloc_all()
 
     def reset_for_prefill(self, B: int, R: int, T: int):
@@ -341,7 +337,7 @@ class _BrosaOnlineEngineNB:
 
     def prefill_numpy(self, q_btr_np, k_btr_np, v_btr_np):
         if not _NUMBA_OK:
-            raise RuntimeError("")
+            raise RuntimeError("Numba not available")
         B, T, R = q_btr_np.shape
         assert R == self.R and B == self.B
         self.reset_for_prefill(B, R, T)
@@ -358,7 +354,7 @@ class _BrosaOnlineEngineNB:
 
     def step_numpy(self, q_br_np, k_br_np, v_br_np):
         if not _NUMBA_OK:
-            raise RuntimeError("")
+            raise RuntimeError("Numba not available")
         B, R = q_br_np.shape
         assert B == self.B and R == self.R
         self._maybe_grow_for_step(may_new_run=True, may_new_states_per_ext=2)
@@ -379,17 +375,15 @@ class _BrosaOnlineEngineNB:
         valid_br1 = valid_n.reshape(B, R, 1)
         return bits_b1c, valid_br1
 
-
 def _ensure_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
     if DEVICE_FALLBACK_CPU:
         return torch.device("cpu")
-    raise RuntimeError("")
+    raise RuntimeError("CUDA device required")
 
 DEVICE = _ensure_device()
 DTYPE_INFER = torch.bfloat16 if (USE_BF16 and DEVICE.type == "cuda") else torch.float16
-
 
 def _pack_bits_btC_to_btr(bits_btC: torch.Tensor, Mbits: int) -> torch.Tensor:
     B, T, C = bits_btC.shape
@@ -400,7 +394,6 @@ def _pack_bits_btC_to_btr(bits_btC: torch.Tensor, Mbits: int) -> torch.Tensor:
     for j in range(Mbits):
         out |= ((x[..., j] & 1) << j)
     return out
-
 
 class _SAM:
     __slots__ = ("K", "next", "link", "length", "endpos", "last")
@@ -462,8 +455,7 @@ def _int_to_bits_list(x: int, J: int) -> List[int]:
     return [ (int(x) >> j) & 1 for j in range(J) ]
 
 class _RouteState:
-    __slots__ = ("sam", "E", "S", "Gamma", "q_last", "s_q", "nu",
-                 "v_bits_runs")
+    __slots__ = ("sam", "E", "S", "Gamma", "q_last", "s_q", "nu", "v_bits_runs")
     def __init__(self, K: int):
         self.sam = _SAM(K)
         self.E = -1
@@ -594,7 +586,6 @@ class _BrosaOnlineState:
         valid_t  = torch.from_numpy(valid).to(self.device, dtype=torch.int32)
         return b_bits_t, valid_t
 
-
 def _sam_new_state_py(next_arr, link, length, e, size, L):
     s = size[0]; size[0] = s + 1
     length[s] = L; link[s] = -1; e[s] = -1
@@ -636,7 +627,6 @@ def _sam_match_next_from_py(next_arr, link, s, x):
         p = link[p]
     return -1 if p == -1 else int(next_arr[p, x])
 
-
 import torch
 import torch.nn as nn
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM, Qwen3DecoderLayer
@@ -655,7 +645,7 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
     assert inject_mode in ("pre_attn", "post_attn")
     C = int(model.config.hidden_size)
     J = int(bits_per_route)
-    assert C % J == 0, f""
+    assert C % J == 0, f"hidden_size {C} must be divisible by bits_per_route={J}"
     R = C // J
     K = 1 << J
 
@@ -850,8 +840,9 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
 
         layer.forward = _forward_brosa_online_nb.__get__(layer, Qwen3DecoderLayer)
 
-    print(f"")
-
+    print(f"[patch] Patched model. layers_from={apply_from_layer}, "
+          f"J={J}, R={R}, K={K}, inject={inject_mode}, numba_threads={ROSA_NUMBA_THREADS}, "
+          f"overlap_workers={ROSA_THREAD_WORKERS}")
 
 def _maybe_load_json(path: str | None) -> dict | None:
     if path and os.path.isfile(path):
@@ -874,6 +865,7 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
         FIRST_GLOBAL_LAYERS = int(run_meta.get("first_global_layers", FIRST_GLOBAL_LAYERS))
 
     cfg = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
+    cfg.tie_word_embeddings = False
     cfg.sliding_window = ATTN_WINDOW
     cfg.max_window_layers = FIRST_GLOBAL_LAYERS
     if (not hasattr(cfg, "layer_types")) or (cfg.layer_types is None):
@@ -910,29 +902,28 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
                 with safe_open(ROSA_ADAPTER_PATH, framework="pt") as f:
                     for key in f.keys():
                         state_dict[key] = f.get_tensor(key)
-                print(f"")
+                print(f"[adapter] Load adapter via safetensors: {ROSA_ADAPTER_PATH}")
             else:
-                raise RuntimeError("")
+                raise RuntimeError("safetensors not available or not used")
 
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
         except Exception as e:
-            print(f"")
+            print(f"[warn] safetensors load failed ({e}); fallback to torch.load")
             state = torch.load(ROSA_ADAPTER_PATH, map_location="cpu")
             missing, unexpected = model.load_state_dict(state, strict=False)
 
         if len(unexpected) > 0:
-            print(f"")
+            print(f"[warn] Unexpected keys: {len(unexpected)} (first 10) -> {unexpected[:10]}")
         if len(missing) > 0:
-            print(f"")
+            print(f"[warn] Missing keys: {len(missing)} (first 10) -> {missing[:10]}")
         else:
-            print("")
+            print("[adapter] Adapter loaded.")
 
     else:
-        print("")
+        print("[adapter] No adapter provided or file not found; using randomly-initialized heads.")
 
     return model, tokenizer
-
 
 @torch.inference_mode()
 def _sample_from_logits(logits: torch.Tensor,
@@ -1058,7 +1049,6 @@ def generate(
 
     return tokenizer.decode(generated, skip_special_tokens=True)
 
-
 def main():
     torch.manual_seed(SEED)
     if DEVICE.type == "cuda":
@@ -1079,7 +1069,6 @@ def main():
     print("\n=== Prompt ===\n", demo)
     print("\n=== Output ===\n", text)
     print(f"\n[Done] elapsed: {dt:.3f}s")
-
 
 if __name__ == "__main__":
     main()

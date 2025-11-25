@@ -12,7 +12,25 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 
 ---
 
-## Experimental Results
+## Experimental 2 (2025.11.26)
+
+### Setup
+
+- **Base model:** Qwen3-0.6B with global attention or windowed attention  
+- **Training:** 3B tokens from prolong-52K, original model frozen, only ROSA adapters trained  
+- **Evaluation:** lm-eval  
+
+### Results
+
+| Model                           | HellaSwag (acc_norm) | LAMBADA-OAI (acc) | MMLU (acc) | PIQA (acc) | SciQ (acc) | Winogrande (acc) | niah_single_1-64k (acc) |
+|:-------------------------------|----------------------:|--------------------:|------------:|------------:|------------:|-------------------:|-------------------------:|
+| Qwen3-0.6B                     |               0.4737  |             0.4013  |     0.4017  |     0.6736  |     0.8730  |            0.5659  |                  1.0000  |
+| Qwen3-0.6B (window_attn + rosa)  |               0.4716  |             0.4005  |     0.4013  |     0.6763  |     0.8680  |            0.5635  |                  1.0000  |
+
+
+The experimental results show that with only a small amount of training, ROSA-Tuning enables a baseline global-attention model to switch to windowed attention while maintaining performance comparable to that of full global attention.
+
+## Experimental 1
 
 ### Setup
 

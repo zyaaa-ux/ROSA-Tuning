@@ -16,7 +16,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 
 ### Setup
 
-- **Base model:** Qwen3-0.6B with global attention or windowed attention  
+- **Base model:** Qwen3-0.6B with global attention or windowed attention(window size 2048)  
 - **Training:** 3B tokens from prolong-52K, original model frozen, only ROSA adapters trained  
 - **Evaluation:** lm-eval  
 

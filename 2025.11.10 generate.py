@@ -1,38 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-MODEL_LOCAL_DIR: str = ""
+TIE = False
 
-ROSA_ADAPTER_PATH: str | None = None
-
+MODEL_LOCAL_DIR: str = "/path/to/base/model/"
+ROSA_ADAPTER_PATH: str | None = "/path/to/adapter/model.safetensors"
 ROSA_META_JSON_PATH = None
 RUN_META_JSON_PATH = None
 
-MAX_NEW_TOKENS: int = 0
+MAX_NEW_TOKENS: int = 128
 DO_SAMPLE: bool = False
-TEMPERATURE: float = 0.0
-TOP_P: float = 0.0
-TOP_K: int = 0
-NUM_BEAMS: int = 0
-REPETITION_PENALTY: float = 0.0
+TEMPERATURE: float = 0.8
+TOP_P: float = 0.95
+TOP_K: int = 50
+NUM_BEAMS: int = 1
+REPETITION_PENALTY: float = 1.05
 
-BITS_PER_ROUTE: int = 0
-ROSA_INJECT_MODE: str = ""
-APPLY_FROM_LAYER: int = 0
+BITS_PER_ROUTE: int = 4
+ROSA_INJECT_MODE: str = "post_attn"
+APPLY_FROM_LAYER: int = 1
 
-ATTN_WINDOW: int = 0
-FIRST_GLOBAL_LAYERS: int = 0
+ATTN_WINDOW: int = 1024
+FIRST_GLOBAL_LAYERS: int = 1
 
-USE_FLASH_ATTN: bool = False
-USE_BF16: bool = False
+USE_FLASH_ATTN: bool = True
+USE_BF16: bool = True
 DEVICE_FALLBACK_CPU: bool = False
 
-ROSA_USE_NUMBA: bool = False
-ROSA_NUMBA_PARALLEL: bool = False
-ROSA_NUMBA_THREADS: int = 0
+ROSA_USE_NUMBA: bool = True
+ROSA_NUMBA_PARALLEL: bool = True
+ROSA_NUMBA_THREADS: int = 24
 ROSA_THREAD_WORKERS: int = 0
 
-SEED: int = 0
+SEED: int = 42
 
 import os
 import json
@@ -80,7 +80,6 @@ except Exception:
 from concurrent.futures import ThreadPoolExecutor
 _ROSA_THREAD_POOL = None
 _ROSA_THREAD_POOL_PID = None
-
 def _get_rosa_thread_pool():
     global _ROSA_THREAD_POOL, _ROSA_THREAD_POOL_PID
     n_workers = int(ROSA_THREAD_WORKERS)
@@ -645,7 +644,7 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
     assert inject_mode in ("pre_attn", "post_attn")
     C = int(model.config.hidden_size)
     J = int(bits_per_route)
-    assert C % J == 0, f"hidden_size {C} must be divisible by bits_per_route={J}"
+    assert C % J == 0
     R = C // J
     K = 1 << J
 
@@ -700,7 +699,9 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
             position_embeddings=None,
             **kwargs
         ):
+
             B, T, Cx = hidden_states.shape
+
             assert Cx == C
             device = hidden_states.device
             dtype  = hidden_states.dtype
@@ -840,9 +841,8 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
 
         layer.forward = _forward_brosa_online_nb.__get__(layer, Qwen3DecoderLayer)
 
-    print(f"[patch] Patched model. layers_from={apply_from_layer}, "
-          f"J={J}, R={R}, K={K}, inject={inject_mode}, numba_threads={ROSA_NUMBA_THREADS}, "
-          f"overlap_workers={ROSA_THREAD_WORKERS}")
+    print(f"[patched] layers_from={apply_from_layer}, J={J}, R={R}, K={K}, "
+          f"inject={inject_mode}, numba_threads={ROSA_NUMBA_THREADS}, overlap_workers={ROSA_THREAD_WORKERS}")
 
 def _maybe_load_json(path: str | None) -> dict | None:
     if path and os.path.isfile(path):
@@ -865,7 +865,7 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
         FIRST_GLOBAL_LAYERS = int(run_meta.get("first_global_layers", FIRST_GLOBAL_LAYERS))
 
     cfg = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
-    cfg.tie_word_embeddings = False
+    cfg.tie_word_embeddings = TIE
     cfg.sliding_window = ATTN_WINDOW
     cfg.max_window_layers = FIRST_GLOBAL_LAYERS
     if (not hasattr(cfg, "layer_types")) or (cfg.layer_types is None):
@@ -902,26 +902,26 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
                 with safe_open(ROSA_ADAPTER_PATH, framework="pt") as f:
                     for key in f.keys():
                         state_dict[key] = f.get_tensor(key)
-                print(f"[adapter] Load adapter via safetensors: {ROSA_ADAPTER_PATH}")
+                print(f"[adapter] loaded via safetensors: {ROSA_ADAPTER_PATH}")
             else:
-                raise RuntimeError("safetensors not available or not used")
+                raise RuntimeError("safetensors not available")
 
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
 
         except Exception as e:
-            print(f"[warn] safetensors load failed ({e}); fallback to torch.load")
+            print(f"[warn] safetensors failed ({e}); fallback to torch.load")
             state = torch.load(ROSA_ADAPTER_PATH, map_location="cpu")
             missing, unexpected = model.load_state_dict(state, strict=False)
 
         if len(unexpected) > 0:
-            print(f"[warn] Unexpected keys: {len(unexpected)} (first 10) -> {unexpected[:10]}")
+            print(f"[warn] unexpected keys: {len(unexpected)}")
         if len(missing) > 0:
-            print(f"[warn] Missing keys: {len(missing)} (first 10) -> {missing[:10]}")
+            print(f"[warn] missing keys: {len(missing)}")
         else:
-            print("[adapter] Adapter loaded.")
+            print("[adapter] loaded")
 
     else:
-        print("[adapter] No adapter provided or file not found; using randomly-initialized heads.")
+        print("[adapter] not provided or file not found")
 
     return model, tokenizer
 
@@ -963,12 +963,12 @@ def generate(
     model,
     tokenizer,
     prompt: str,
-    max_new_tokens: int = 0,
+    max_new_tokens: int = 128,
     do_sample: bool = False,
-    temperature: float = 0.0,
-    top_p: float = 0.0,
+    temperature: float = 0.8,
+    top_p: float = 0.95,
     top_k: int = 0,
-    repetition_penalty: float = 0.0,
+    repetition_penalty: float = 1.0,
     eos_token_id: int | None = None,
     add_special_tokens: bool = False,
 ) -> str:
@@ -1061,7 +1061,7 @@ def main():
 
     model, tokenizer = build_model_and_tokenizer()
 
-    demo = ""
+    demo = "Explain the concept of attention mechanism in transformers."
     t0 = time.time()
     text = generate(model, tokenizer, demo)
     dt = time.time() - t0

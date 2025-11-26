@@ -38,16 +38,17 @@ import atexit
 
 from transformers.optimization import get_cosine_schedule_with_warmup
 
+TIE = False
 
 import os as _os
-_os.environ.setdefault("ROSA_USE_NUMBA", "")
-_os.environ.setdefault("ROSA_NUMBA_PARALLEL", "")
-_os.environ.setdefault("LCG_ENABLE", "")
+_os.environ.setdefault("ROSA_USE_NUMBA", "1")
+_os.environ.setdefault("ROSA_NUMBA_PARALLEL", "1")
+_os.environ.setdefault("LCG_ENABLE", "1")
 
-_os.environ["ROSA_INJECT_MODE"] = ""
+_os.environ["ROSA_INJECT_MODE"] = "post_attn"
 
-_USE_NUMBA = _os.environ.get("ROSA_USE_NUMBA", "").lower() not in ("0", "false")
-_PARALLEL  = _os.environ.get("ROSA_NUMBA_PARALLEL", "").lower() not in ("0", "false")
+_USE_NUMBA = _os.environ.get("ROSA_USE_NUMBA", "1").lower() not in ("0", "false")
+_PARALLEL  = _os.environ.get("ROSA_NUMBA_PARALLEL", "1").lower() not in ("0", "false")
 
 try:
     import numba as _nb
@@ -56,69 +57,69 @@ except Exception:
     _NUMBA_OK = False
 
 
-MODEL_LOCAL_DIR = ""
+MODEL_LOCAL_DIR = "/path/to/model/Qwen3-0.6B/"
 MODEL_DIR = None
-DATASET_DIR     = ""
-OUTPUT_DIR      = ""
+DATASET_DIR     = "/path/to/dataset/train_data/"
+OUTPUT_DIR      = "/path/to/output/experiment_1/"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-SAVE_STRATEGY = ""
-SAVE_STEPS = 0
+SAVE_STRATEGY = "steps"
+SAVE_STEPS = 5000
 
 USE_FLASH_ATTN = True
 BF16 = True if torch.cuda.is_available() else False
 
-SEQ_LEN = 0
-ATTN_WINDOW = 0
-FIRST_GLOBAL_LAYERS = 0
+SEQ_LEN = 53248
+ATTN_WINDOW = 2048
+FIRST_GLOBAL_LAYERS = 1
 
-LCG_POS_SUBSAMPLE: float = 0.0
+LCG_POS_SUBSAMPLE: float = 1.0
 
-ROSA_Q_CONTRAST_USE_V_PROB: int = int(os.environ.get("ROSA_Q_CONTRAST_USE_V_PROB", 0))
+ROSA_Q_CONTRAST_USE_V_PROB: int = int(os.environ.get("ROSA_Q_CONTRAST_USE_V_PROB", 1))
 
-BITS_PER_ROUTE: int = int(os.environ.get("ROSA_BITS_PER_ROUTE", 0))
-assert BITS_PER_ROUTE >= 1, "ROSA_BITS_PER_ROUTE must be >=1"
+BITS_PER_ROUTE: int = int(os.environ.get("ROSA_BITS_PER_ROUTE", 4))
+assert BITS_PER_ROUTE >= 1, "ROSA_BITS_PER_ROUTE must be >= 1"
 
-BINARY_TEMP_Q: float = float(os.environ.get("BINARY_TEMP_Q", 0.0))
-BINARY_TEMP_K: float = float(os.environ.get("BINARY_TEMP_K", 0.0))
-BINARY_TEMP_V: float = float(os.environ.get("BINARY_TEMP_V", 0.0))
+BINARY_TEMP_Q: float = float(os.environ.get("BINARY_TEMP_Q", 1.0))
+BINARY_TEMP_K: float = float(os.environ.get("BINARY_TEMP_K", 1.0))
+BINARY_TEMP_V: float = float(os.environ.get("BINARY_TEMP_V", 1.0))
 
 LCG_POS_SUBSAMPLE: float = float(os.environ.get("LCG_POS_SUBSAMPLE", LCG_POS_SUBSAMPLE))
 
-ROSA_NUMBA_THREADS: int = 0
+ROSA_NUMBA_THREADS: int = 18
 ROSA_ENABLE_NUMBA_PARALLEL: bool = True
 ROSA_THREAD_WORKERS: int = 0
 
-WEIGHT_DECAY = 0.0
-NUM_EPOCHS = 0
-PER_DEVICE_TRAIN_BSZ = 0
-GRAD_ACCUM_STEPS = 0
-LOGGING_STEPS = 0
-EVAL_STEPS = 0
-SEED = 0
+WEIGHT_DECAY = 0.01
+NUM_EPOCHS = 1
+PER_DEVICE_TRAIN_BSZ = 1
+GRAD_ACCUM_STEPS = 1
+LOGGING_STEPS = 20
+EVAL_STEPS = 200
+SEED = 42
 
-SAVE_STATE_DICT_NAME = ""
+SAVE_STATE_DICT_NAME = "rosa_adapters.pt"
 
 GRADIENT_CHECKPOINTING = True
 
 TWO_STAGE = True
 
-STAGE_A_TOKENS          = 0
-STAGE_A_LR_ROSA         = 0.0
-STAGE_A_WEIGHT_DECAY    = 0.0
-STAGE_A_WARMUP_STEPS    = 0
-SAVE_STEPS_STAGE_A      = 0
-EVAL_STEPS_STAGE_A      = 0
+STAGE_A_TOKENS          = 3000000000
+STAGE_A_LR_ROSA         = 3e-3
+STAGE_A_WEIGHT_DECAY    = 0.01
+STAGE_A_WARMUP_STEPS    = 20
+SAVE_STEPS_STAGE_A      = 100
+EVAL_STEPS_STAGE_A      = 1000000
 
-STAGE_B_LR_ROSA         = 0.0
-STAGE_B_LR_BACKBONE     = 0.0
-STAGE_B_WEIGHT_DECAY    = 0.0
-STAGE_B_WARMUP_STEPS    = 0
-SAVE_STEPS_STAGE_B      = 0
-EVAL_STEPS_STAGE_B      = 0
+STAGE_B_LR_ROSA         = 3e-4
+STAGE_B_LR_BACKBONE     = 5e-6
+STAGE_B_WEIGHT_DECAY    = 0.01
+STAGE_B_WARMUP_STEPS    = 20
+SAVE_STEPS_STAGE_B      = 100
+EVAL_STEPS_STAGE_B      = 10000000
 
 STAGE_B_ENABLE_GC       = True
-STAGE_B_LCG_POS_SUBSAMPLE = 0.0
+STAGE_B_LCG_POS_SUBSAMPLE = 1.0
 
 
 def _env_int(k, default):
@@ -830,7 +831,7 @@ class FixedLenLMCollator:
         for c in cols:
             if c not in first:
                 raise KeyError(
-                    f"Sample missing column '{c}'. This collator expects samples to contain {cols}."
+                    f"Sample missing column '{c}'. This collator expects samples to contain {cols} three columns."
                 )
 
         batch: Dict[str, torch.Tensor] = {}
@@ -855,7 +856,7 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
     import torch.nn as nn
     from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer
 
-    inject_mode = os.environ.get("ROSA_INJECT_MODE", globals().get("ROSA_INJECT_MODE", "")).lower()
+    inject_mode = os.environ.get("ROSA_INJECT_MODE", globals().get("ROSA_INJECT_MODE", "pre_attn")).lower()
     assert inject_mode in ("pre_attn", "post_attn")
 
     base_param = model.model.embed_tokens.weight
@@ -1040,7 +1041,7 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
         layer.forward = _forward_qkv_brosa.__get__(layer, Qwen3DecoderLayer)
 
     meta = {
-        "apply_layers_from": 0,
+        "apply_layers_from": 1,
         "bits_per_route": BITS_PER_ROUTE,
         "num_routes": R,
         "k_symbols": K_sym,
@@ -1054,7 +1055,7 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
 def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
     config = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
     config.sliding_window = ATTN_WINDOW
-    config.tie_word_embeddings = False
+    config.tie_word_embeddings = TIE
 
     config.max_window_layers = FIRST_GLOBAL_LAYERS
     if (not hasattr(config, "layer_types")) or (config.layer_types is None):
@@ -1063,9 +1064,9 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
             for i in range(config.num_hidden_layers)
         ]
     if hasattr(config, "attn_implementation"):
-        config.attn_implementation = "" if USE_FLASH_ATTN else ""
+        config.attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
     else:
-        config._attn_implementation = "" if USE_FLASH_ATTN else ""
+        config._attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_DIR, use_fast=True)
     model = Qwen3ForCausalLM.from_pretrained(
@@ -1098,7 +1099,6 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
         model.enable_input_require_grads()
 
     return model, tokenizer
-
 
 
 def save_rosa_only(model: Qwen3ForCausalLM, out_dir: str):
@@ -1142,7 +1142,7 @@ def save_meta(model: Qwen3ForCausalLM, out_dir: str):
         "attn_window": ATTN_WINDOW,
         "first_global_layers": FIRST_GLOBAL_LAYERS,
         "rosa": {
-            "type": "",
+            "type": "binary",
             "bits_per_route": int(BITS_PER_ROUTE),
             "temperature": {
                 "q": float(BINARY_TEMP_Q),
@@ -1159,10 +1159,8 @@ def save_meta(model: Qwen3ForCausalLM, out_dir: str):
     print(f"[done] meta saved at {os.path.join(out_dir, 'run_meta.json')}")
 
 
-
-
 def build_optimizer_params(model):
-    inject_mode = os.environ.get("ROSA_INJECT_MODE", globals().get("ROSA_INJECT_MODE", "")).lower()
+    inject_mode = os.environ.get("ROSA_INJECT_MODE", globals().get("ROSA_INJECT_MODE", "pre_attn")).lower()
 
     heads_decay, emb_nodecay, gate_nodecay = [], [], []
     backbone_decay, backbone_nodecay = [], []
@@ -1229,7 +1227,6 @@ def build_optimizer_params(model):
     return groups
 
 
-
 def _get_world_size() -> int:
     try:
         if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -1247,7 +1244,7 @@ class TwoStageSwitchCallback(TrainerCallback):
         self.switch_step = None
 
     def _tokens_per_update(self, args) -> int:
-        world_size = int(os.environ.get("WORLD_SIZE", ""))
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
         return int(SEQ_LEN) * int(args.per_device_train_batch_size) * int(args.gradient_accumulation_steps) * world_size
 
     def on_train_begin(self, args, state, control, model=None, **kwargs):
@@ -1368,27 +1365,27 @@ def main():
         output_dir=OUTPUT_DIR,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=PER_DEVICE_TRAIN_BSZ,
-        per_device_eval_batch_size=0,
+        per_device_eval_batch_size=1,
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
 
         learning_rate=STAGE_A_LR_ROSA,
 
-        lr_scheduler_type="",
+        lr_scheduler_type="constant_with_warmup",
         warmup_steps=STAGE_A_WARMUP_STEPS,
 
         logging_steps=LOGGING_STEPS,
         eval_steps=EVAL_STEPS_STAGE_A,
         save_strategy=SAVE_STRATEGY,
         save_steps=SAVE_STEPS_STAGE_A,
-        report_to="",
+        report_to="none",
         fp16=(not BF16) and torch.cuda.is_available(),
         bf16=BF16,
-        dataloader_num_workers=0,
+        dataloader_num_workers=2,
         gradient_checkpointing=GRADIENT_CHECKPOINTING,
         remove_unused_columns=False,
         ddp_find_unused_parameters=False,
-        ddp_bucket_cap_mb=0,
-        optim="",
+        ddp_bucket_cap_mb=16,
+        optim="adamw_torch",
     )
 
     optimizer_params = build_optimizer_params(model)
@@ -1396,7 +1393,7 @@ def main():
     class _Trainer(Trainer):
         def create_optimizer(self):
             if self.optimizer is None:
-                self.optimizer = torch.optim.AdamW(optimizer_params, betas=(0.0, 0.0), eps=0.0)
+                self.optimizer = torch.optim.AdamW(optimizer_params, betas=(0.9, 0.98), eps=1e-8)
             return self.optimizer
 
     trainer = _Trainer(
@@ -1409,7 +1406,7 @@ def main():
     )
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total trainable parameters: {total_params:,}")
+    print(f"Total parameters: {total_params:,}")
 
     from transformers.trainer_utils import get_last_checkpoint
 
@@ -1418,7 +1415,6 @@ def main():
 
     if is_main_process():
         save_meta(model, OUTPUT_DIR)
-
 
 
 if __name__ == "__main__":

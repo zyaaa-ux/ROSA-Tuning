@@ -38,7 +38,6 @@ import atexit
 
 from transformers.optimization import get_cosine_schedule_with_warmup
 
-TIE = False
 
 import os as _os
 _os.environ.setdefault("ROSA_USE_NUMBA", "1")
@@ -57,10 +56,12 @@ except Exception:
     _NUMBA_OK = False
 
 
-MODEL_LOCAL_DIR = "/path/to/model/Qwen3-0.6B/"
+TIE = True
+
+MODEL_LOCAL_DIR = "/path/to/base/model/"
 MODEL_DIR = None
-DATASET_DIR     = "/path/to/dataset/train_data/"
-OUTPUT_DIR      = "/path/to/output/experiment_1/"
+DATASET_DIR     = "/path/to/dataset/"
+OUTPUT_DIR      = "/path/to/output/"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 SAVE_STRATEGY = "steps"
@@ -78,7 +79,7 @@ LCG_POS_SUBSAMPLE: float = 1.0
 ROSA_Q_CONTRAST_USE_V_PROB: int = int(os.environ.get("ROSA_Q_CONTRAST_USE_V_PROB", 1))
 
 BITS_PER_ROUTE: int = int(os.environ.get("ROSA_BITS_PER_ROUTE", 4))
-assert BITS_PER_ROUTE >= 1, "ROSA_BITS_PER_ROUTE must be >= 1"
+assert BITS_PER_ROUTE >= 1, "ROSA_BITS_PER_ROUTE must be >=1"
 
 BINARY_TEMP_Q: float = float(os.environ.get("BINARY_TEMP_Q", 1.0))
 BINARY_TEMP_K: float = float(os.environ.get("BINARY_TEMP_K", 1.0))
@@ -86,7 +87,7 @@ BINARY_TEMP_V: float = float(os.environ.get("BINARY_TEMP_V", 1.0))
 
 LCG_POS_SUBSAMPLE: float = float(os.environ.get("LCG_POS_SUBSAMPLE", LCG_POS_SUBSAMPLE))
 
-ROSA_NUMBA_THREADS: int = 18
+ROSA_NUMBA_THREADS: int = 64
 ROSA_ENABLE_NUMBA_PARALLEL: bool = True
 ROSA_THREAD_WORKERS: int = 0
 
@@ -105,13 +106,13 @@ GRADIENT_CHECKPOINTING = True
 TWO_STAGE = True
 
 STAGE_A_TOKENS          = 3000000000
-STAGE_A_LR_ROSA         = 3e-3
+STAGE_A_LR_ROSA         = 1e-3
 STAGE_A_WEIGHT_DECAY    = 0.01
 STAGE_A_WARMUP_STEPS    = 20
 SAVE_STEPS_STAGE_A      = 100
 EVAL_STEPS_STAGE_A      = 1000000
 
-STAGE_B_LR_ROSA         = 3e-4
+STAGE_B_LR_ROSA         = 2e-4
 STAGE_B_LR_BACKBONE     = 5e-6
 STAGE_B_WEIGHT_DECAY    = 0.01
 STAGE_B_WARMUP_STEPS    = 20
@@ -831,7 +832,7 @@ class FixedLenLMCollator:
         for c in cols:
             if c not in first:
                 raise KeyError(
-                    f"Sample missing column '{c}'. This collator expects samples to contain {cols} three columns."
+                    f"Sample missing column '{c}'. Expected columns: {cols}."
                 )
 
         batch: Dict[str, torch.Tensor] = {}
@@ -863,7 +864,7 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
     base_dtype = base_param.dtype
     base_device = base_param.device
     C: int = model.config.hidden_size
-    assert C % BITS_PER_ROUTE == 0, f"hidden_size {C} cannot be divided by BITS_PER_ROUTE={BITS_PER_ROUTE}"
+    assert C % BITS_PER_ROUTE == 0, f"hidden_size {C} must be divisible by BITS_PER_ROUTE={BITS_PER_ROUTE}"
     R: int = C // BITS_PER_ROUTE
     K_sym: int = 1 << BITS_PER_ROUTE
 
@@ -1054,15 +1055,21 @@ def patch_qwen3_with_multiroute_rosa(model: Qwen3ForCausalLM):
 
 def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
     config = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
-    config.sliding_window = ATTN_WINDOW
+
+    if hasattr(config, "use_sliding_window"):
+        config.use_sliding_window = True
+
+    config.sliding_window = int(ATTN_WINDOW) if ATTN_WINDOW is not None else config.sliding_window
     config.tie_word_embeddings = TIE
 
-    config.max_window_layers = FIRST_GLOBAL_LAYERS
-    if (not hasattr(config, "layer_types")) or (config.layer_types is None):
-        config.layer_types = [
-            "full_attention" if i < config.max_window_layers else "sliding_attention"
-            for i in range(config.num_hidden_layers)
-        ]
+    config.max_window_layers = int(FIRST_GLOBAL_LAYERS) if FIRST_GLOBAL_LAYERS is not None else 0
+
+    n_layers = int(getattr(config, "num_hidden_layers"))
+    config.layer_types = [
+        "full_attention" if i < config.max_window_layers else "sliding_attention"
+        for i in range(n_layers)
+    ]
+
     if hasattr(config, "attn_implementation"):
         config.attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
     else:
@@ -1075,7 +1082,7 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
         torch_dtype=torch.bfloat16 if BF16 else torch.float16,
         low_cpu_mem_usage=True,
     )
-    
+
     model.config.use_cache = False
     patch_qwen3_with_multiroute_rosa(model)
 
@@ -1406,7 +1413,7 @@ def main():
     )
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params:,}")
+    print(f"Total trainable parameters: {total_params:,}")
 
     from transformers.trainer_utils import get_last_checkpoint
 

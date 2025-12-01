@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-TIE = False
+TIE = True
 
-MODEL_LOCAL_DIR: str = "/path/to/base/model/"
-ROSA_ADAPTER_PATH: str | None = "/path/to/adapter/model.safetensors"
+MODEL_LOCAL_DIR: str = "/path/to/model/Qwen__Qwen3-0.6B/main/"
+
+ROSA_ADAPTER_PATH: str | None = "/path/to/adapter/checkpoint-600/model.safetensors"
+
 ROSA_META_JSON_PATH = None
 RUN_META_JSON_PATH = None
 
@@ -20,7 +22,7 @@ BITS_PER_ROUTE: int = 4
 ROSA_INJECT_MODE: str = "post_attn"
 APPLY_FROM_LAYER: int = 1
 
-ATTN_WINDOW: int = 1024
+ATTN_WINDOW: int = 2048
 FIRST_GLOBAL_LAYERS: int = 1
 
 USE_FLASH_ATTN: bool = True
@@ -29,7 +31,7 @@ DEVICE_FALLBACK_CPU: bool = False
 
 ROSA_USE_NUMBA: bool = True
 ROSA_NUMBA_PARALLEL: bool = True
-ROSA_NUMBA_THREADS: int = 64
+ROSA_NUMBA_THREADS: int = 24
 ROSA_THREAD_WORKERS: int = 0
 
 SEED: int = 42
@@ -80,6 +82,7 @@ except Exception:
 from concurrent.futures import ThreadPoolExecutor
 _ROSA_THREAD_POOL = None
 _ROSA_THREAD_POOL_PID = None
+
 def _get_rosa_thread_pool():
     global _ROSA_THREAD_POOL, _ROSA_THREAD_POOL_PID
     n_workers = int(ROSA_THREAD_WORKERS)
@@ -644,7 +647,7 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
     assert inject_mode in ("pre_attn", "post_attn")
     C = int(model.config.hidden_size)
     J = int(bits_per_route)
-    assert C % J == 0
+    assert C % J == 0, f"hidden_size {C} not divisible by bits_per_route={J}"
     R = C // J
     K = 1 << J
 
@@ -841,8 +844,9 @@ def patch_qwen3_with_multiroute_rosa_infer_online_nb(
 
         layer.forward = _forward_brosa_online_nb.__get__(layer, Qwen3DecoderLayer)
 
-    print(f"[patched] layers_from={apply_from_layer}, J={J}, R={R}, K={K}, "
-          f"inject={inject_mode}, numba_threads={ROSA_NUMBA_THREADS}, overlap_workers={ROSA_THREAD_WORKERS}")
+    print(f"[bROSA-online-nb] Patched Qwen3. layers_from={apply_from_layer}, "
+          f"J={J}, R={R}, K={K}, inject={inject_mode}, numba_threads={ROSA_NUMBA_THREADS}, "
+          f"overlap_workers={ROSA_THREAD_WORKERS}")
 
 def _maybe_load_json(path: str | None) -> dict | None:
     if path and os.path.isfile(path):
@@ -866,19 +870,40 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
 
     cfg = AutoConfig.from_pretrained(MODEL_LOCAL_DIR)
     cfg.tie_word_embeddings = TIE
-    cfg.sliding_window = ATTN_WINDOW
-    cfg.max_window_layers = FIRST_GLOBAL_LAYERS
-    if (not hasattr(cfg, "layer_types")) or (cfg.layer_types is None):
-        cfg.layer_types = [
-            "full_attention" if i < cfg.max_window_layers else "sliding_attention"
-            for i in range(cfg.num_hidden_layers)
-        ]
+
+    sw  = int(ATTN_WINDOW) if ATTN_WINDOW is not None else None
+    mgl = int(FIRST_GLOBAL_LAYERS) if FIRST_GLOBAL_LAYERS is not None else 0
+
+    try:
+        cfg.sliding_window = sw
+    except Exception:
+        setattr(cfg, "sliding_window", sw)
+
+    try:
+        cfg.max_window_layers = mgl
+    except Exception:
+        setattr(cfg, "max_window_layers", mgl)
+
+    if hasattr(cfg, "use_sliding_window"):
+        cfg.use_sliding_window = (sw is not None)
+
+    n_layers = int(getattr(cfg, "num_hidden_layers"))
+    cfg.layer_types = [
+        "full_attention" if i < mgl else "sliding_attention"
+        for i in range(n_layers)
+    ]
+
+    impl = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
     if hasattr(cfg, "attn_implementation"):
-        cfg.attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+        cfg.attn_implementation = impl
     else:
-        cfg._attn_implementation = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
+        cfg._attn_implementation = impl
+
+    cfg.use_cache = True
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_DIR, use_fast=True)
+    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
 
     model = Qwen3ForCausalLM.from_pretrained(
         MODEL_LOCAL_DIR,
@@ -907,7 +932,6 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
                 raise RuntimeError("safetensors not available")
 
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
-
         except Exception as e:
             print(f"[warn] safetensors failed ({e}); fallback to torch.load")
             state = torch.load(ROSA_ADAPTER_PATH, map_location="cpu")
@@ -919,7 +943,6 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
             print(f"[warn] missing keys: {len(missing)}")
         else:
             print("[adapter] loaded")
-
     else:
         print("[adapter] not provided or file not found")
 
@@ -1061,7 +1084,7 @@ def main():
 
     model, tokenizer = build_model_and_tokenizer()
 
-    demo = "Explain the concept of attention mechanism in transformers."
+    demo = "Explain the intuition behind binary multi-route ROSA in a concise and professional manner."
     t0 = time.time()
     text = generate(model, tokenizer, demo)
     dt = time.time() - t0

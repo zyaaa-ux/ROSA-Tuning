@@ -2,11 +2,8 @@
 # -*- coding: utf-8 -*-
 
 TIE = True
-
 MODEL_LOCAL_DIR: str = "/path/to/model/Qwen__Qwen3-0.6B/main/"
-
-ROSA_ADAPTER_PATH: str | None = "/path/to/adapter/checkpoint-600/model.safetensors"
-
+ROSA_ADAPTER_PATH: str | None = "/path/to/checkpoint/checkpoint-600/model.safetensors"
 ROSA_META_JSON_PATH = None
 RUN_META_JSON_PATH = None
 
@@ -82,7 +79,6 @@ except Exception:
 from concurrent.futures import ThreadPoolExecutor
 _ROSA_THREAD_POOL = None
 _ROSA_THREAD_POOL_PID = None
-
 def _get_rosa_thread_pool():
     global _ROSA_THREAD_POOL, _ROSA_THREAD_POOL_PID
     n_workers = int(ROSA_THREAD_WORKERS)
@@ -143,6 +139,7 @@ if _NUMBA_OK:
         while p != -1 and next_arr[p, x] == -1:
             p = link[p]
         return -1 if p == -1 else next_arr[p, x]
+
 
 if _NUMBA_OK:
     @nb.njit(cache=True, fastmath=False, inline='always')
@@ -387,6 +384,64 @@ def _ensure_device() -> torch.device:
 DEVICE = _ensure_device()
 DTYPE_INFER = torch.bfloat16 if (USE_BF16 and DEVICE.type == "cuda") else torch.float16
 
+def _collect_safetensor_files(path: str) -> list[str]:
+    files = []
+    idx = os.path.join(path, "model.safetensors.index.json")
+    if os.path.isfile(idx):
+        with open(idx, "r", encoding="utf-8") as f:
+            j = json.load(f)
+        weight_map = j.get("weight_map", {})
+        uniq = sorted(set(os.path.join(path, v) for v in weight_map.values()))
+        files.extend(uniq)
+    else:
+        for fn in os.listdir(path):
+            if fn.endswith(".safetensors"):
+                files.append(os.path.join(path, fn))
+        files.sort()
+    return files
+
+def _load_state_dict_any(path: str) -> dict[str, torch.Tensor]:
+    sd: dict[str, torch.Tensor] = {}
+
+    def _merge_safetensors(fp: str):
+        with safe_open(fp, framework="pt") as f:
+            for k in f.keys():
+                sd[k] = f.get_tensor(k)
+
+    if not path or not os.path.exists(path):
+        raise FileNotFoundError(f"weights not found: {path}")
+
+    if os.path.isdir(path):
+        st_files = _collect_safetensor_files(path)
+        if st_files and _HAS_SAFETENSORS:
+            for fp in st_files:
+                _merge_safetensors(fp)
+            return sd
+        st_files = [os.path.join(path, fn) for fn in os.listdir(path) if fn.endswith(".safetensors")]
+        if st_files and _HAS_SAFETENSORS:
+            for fp in sorted(st_files):
+                _merge_safetensors(fp)
+            return sd
+        bin_files = [os.path.join(path, fn) for fn in os.listdir(path) if fn.endswith(".bin") or fn.endswith(".pt")]
+        for bf in sorted(bin_files):
+            obj = torch.load(bf, map_location="cpu")
+            if isinstance(obj, dict) and "state_dict" in obj:
+                obj = obj["state_dict"]
+            for k, v in obj.items():
+                sd[k] = v
+        return sd
+    else:
+        if path.endswith(".safetensors") and _HAS_SAFETENSORS:
+            _merge_safetensors(path)
+            return sd
+        obj = torch.load(path, map_location="cpu")
+        if isinstance(obj, dict) and "state_dict" in obj:
+            obj = obj["state_dict"]
+        assert isinstance(obj, dict)
+        for k, v in obj.items():
+            sd[k] = v
+        return sd
+
 def _pack_bits_btC_to_btr(bits_btC: torch.Tensor, Mbits: int) -> torch.Tensor:
     B, T, C = bits_btC.shape
     assert C % Mbits == 0
@@ -457,7 +512,8 @@ def _int_to_bits_list(x: int, J: int) -> List[int]:
     return [ (int(x) >> j) & 1 for j in range(J) ]
 
 class _RouteState:
-    __slots__ = ("sam", "E", "S", "Gamma", "q_last", "s_q", "nu", "v_bits_runs")
+    __slots__ = ("sam", "E", "S", "Gamma", "q_last", "s_q", "nu",
+                 "v_bits_runs")
     def __init__(self, K: int):
         self.sam = _SAM(K)
         self.E = -1
@@ -887,18 +943,11 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
     if hasattr(cfg, "use_sliding_window"):
         cfg.use_sliding_window = (sw is not None)
 
-    n_layers = int(getattr(cfg, "num_hidden_layers"))
-    cfg.layer_types = [
-        "full_attention" if i < mgl else "sliding_attention"
-        for i in range(n_layers)
-    ]
-
     impl = "flash_attention_2" if USE_FLASH_ATTN else "sdpa"
     if hasattr(cfg, "attn_implementation"):
         cfg.attn_implementation = impl
     else:
         cfg._attn_implementation = impl
-
     cfg.use_cache = True
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_DIR, use_fast=True)
@@ -920,31 +969,48 @@ def build_model_and_tokenizer() -> Tuple[Qwen3ForCausalLM, AutoTokenizer]:
         apply_from_layer=APPLY_FROM_LAYER,
     )
 
-    if ROSA_ADAPTER_PATH and os.path.isfile(ROSA_ADAPTER_PATH):
+    if ROSA_ADAPTER_PATH and os.path.exists(ROSA_ADAPTER_PATH):
         try:
-            state_dict = {}
-            if _HAS_SAFETENSORS and (ROSA_ADAPTER_PATH.endswith(".safetensors") or True):
-                with safe_open(ROSA_ADAPTER_PATH, framework="pt") as f:
-                    for key in f.keys():
-                        state_dict[key] = f.get_tensor(key)
-                print(f"[adapter] loaded via safetensors: {ROSA_ADAPTER_PATH}")
-            else:
-                raise RuntimeError("safetensors not available")
+            sd = _load_state_dict_any(ROSA_ADAPTER_PATH)
 
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            has_embed = "model.embed_tokens.weight" in sd
+            has_lm    = "lm_head.weight" in sd
+
+            if TIE:
+                if has_embed and not has_lm:
+                    sd["lm_head.weight"] = sd["model.embed_tokens.weight"]
+                    print("[weights] filled lm_head.weight from embed (tied).")
+                elif has_lm and not has_embed:
+                    sd["model.embed_tokens.weight"] = sd["lm_head.weight"]
+                    print("[weights] filled embed from lm_head (tied).")
+
+            missing, unexpected = model.load_state_dict(sd, strict=False)
+            print(f"[weights] loaded from ROSA_ADAPTER_PATH. missing={len(missing)}, unexpected={len(unexpected)}")
+
+            if TIE and hasattr(model, "tie_weights"):
+                model.tie_weights()
+                print("[weights] tie_weights() applied (lm_head <-> embed_tokens).")
+
         except Exception as e:
-            print(f"[warn] safetensors failed ({e}); fallback to torch.load")
-            state = torch.load(ROSA_ADAPTER_PATH, map_location="cpu")
-            missing, unexpected = model.load_state_dict(state, strict=False)
-
-        if len(unexpected) > 0:
-            print(f"[warn] unexpected keys: {len(unexpected)}")
-        if len(missing) > 0:
-            print(f"[warn] missing keys: {len(missing)}")
-        else:
-            print("[adapter] loaded")
+            print(f"[warn] loading full weights failed ({e}); fallback to simple adapter load.")
+            try:
+                state_dict = {}
+                if _HAS_SAFETENSORS and ROSA_ADAPTER_PATH.endswith(".safetensors"):
+                    with safe_open(ROSA_ADAPTER_PATH, framework="pt") as f:
+                        for key in f.keys():
+                            state_dict[key] = f.get_tensor(key)
+                    print(f"[adapter] loaded via safetensors: {ROSA_ADAPTER_PATH}")
+                else:
+                    state = torch.load(ROSA_ADAPTER_PATH, map_location="cpu")
+                    state_dict = state["state_dict"] if isinstance(state, dict) and "state_dict" in state else state
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+                print(f"[adapter] missing={len(missing)}, unexpected={len(unexpected)}")
+                if TIE and hasattr(model, "tie_weights"):
+                    model.tie_weights()
+            except Exception as ee:
+                print(f"[error] adapter fallback also failed: {ee}")
     else:
-        print("[adapter] not provided or file not found")
+        print("[weights] ROSA_ADAPTER_PATH not provided or file not found")
 
     return model, tokenizer
 
@@ -1084,7 +1150,7 @@ def main():
 
     model, tokenizer = build_model_and_tokenizer()
 
-    demo = "Explain the intuition behind binary multi-route ROSA in a concise and professional manner."
+    demo = "You are a concise professional assistant: briefly explain the intuition behind binary multi-route ROSA."
     t0 = time.time()
     text = generate(model, tokenizer, demo)
     dt = time.time() - t0

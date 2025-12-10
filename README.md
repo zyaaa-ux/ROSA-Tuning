@@ -34,7 +34,7 @@ The experimental results show that with only a small amount of training, ROSA-Tu
 
 ### Setup
 
-- **Base model:** Qwen3-0.6B with global attention or windowed attention  
+- **Base model:** Qwen3-Base-0.6B with global attention or windowed attention  
 - **Training:** 28,000 samples, 1 epoch on PG-19 training set, original model frozen, only ROSA adapters trained  
 - **Evaluation:** PG-19 test set, sequence length 16k, window size 1024  
 
@@ -42,14 +42,10 @@ The experimental results show that with only a small amount of training, ROSA-Tu
 
 | Model | PPL |
 |:------|----:|
-| Global Attention | 31.96 |
-| Windowed Attention | 465.59 |
-| Windowed Attention + ROSA (2025.10.13) | 25.96 |
-| Windowed Attention + ROSA (2025.10.14) | 20.01 |
-| Windowed Attention + ROSA (2025.10.15) | 19.93 |
-| Windowed Attention + ROSA (2025.10.20) | 19.82 |
-| Windowed Attention + ROSA (2025.10.22) | 19.63 |
-| Windowed Attention + ROSA (2025.10.31) | 19.06 |
+| Global Attention | 18.96 |
+| Windowed Attention | 74.5 |
+| Windowed Attention + ROSA  | 17.63 |
+
 
 ROSA enables windowed attention to outperform the global attention baseline.
 

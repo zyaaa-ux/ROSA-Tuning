@@ -1,4 +1,4 @@
-  # ROSA-Tuning: Tuning Global Attention into Better Window Attention
+  # ROSA-Tuning: Tuning limited state to approach unlimited state
 
 ## What is ROSA-Tuning
 

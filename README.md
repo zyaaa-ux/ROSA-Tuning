@@ -4,7 +4,7 @@
 
 ROSA(RWKV Online Suffix Automation) is a non-neural memory mechanism running on CPUs, capable of achieving perfect recall and precise matching over infinitely long contexts.
 
-ROSA-Tuning integrates this mechanism with modern large language models, enabling them to handle arbitrarily long inputs using only a fixed-length attention window, while achieving better performance than full global attention.
+ROSA-Tuning integrates this mechanism with modern large language models, enabling them to process arbitrarily long inputs using only a fixed-length attention window, while achieving performance close to full global attention.
 
 During inference, ROSA only needs to cache the rosa_token_id corresponding to the input sequence, instead of the costly kv_cache, achieving an O(1) spatiotemporal complexity per step.
 
@@ -16,19 +16,28 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 
 ### Setup
 
-- **Base model:** Qwen3-0.6B with global attention or windowed attention(window size 2048)  
-- **Training:** 3B tokens from prolong-52K, original model frozen, only ROSA adapters trained  
-- **Evaluation:** lm-eval  
+- **Base model:** Qwen3-1.7B-Base with global attention or windowed attention(window size 2048) . 
+- **Training:** Approximately 30B tokens from prolong； 5B tokens drawn from various long-context reasoning datasets and do not overlap with the test data.  
+- **Evaluation:** lm-eval and longbench.
 
 ### Results
 
-| Model                           | HellaSwag (acc_norm) | LAMBADA-OAI (acc) | MMLU (acc) | PIQA (acc) | SciQ (acc) | Winogrande (acc) | niah_single_1-64k (acc) |
-|:-------------------------------|----------------------:|--------------------:|------------:|------------:|------------:|-------------------:|-------------------------:|
-| Qwen3-0.6B                     |               0.4737  |             0.4013  |     0.4017  |     0.6736  |     0.8730  |            0.5659  |                  1.0000  |
-| Qwen3-0.6B (window_attn + rosa)  |               0.4716  |             0.4005  |     0.4013  |     0.6763  |     0.8680  |            0.5635  |                  1.0000  |
+| lm-eval                     | HellaSwag (acc_norm) | LAMBADA-OAI (acc) | MMLU (acc) | PIQA (acc) | SciQ (acc) | Winogrande (acc) | AVG   |
+|---------------------------|----------------------|-------------------|------------|------------|------------|------------------|-------|
+| qwen3-1.7b-base           | 0.6648               | 0.6295            | 0.6048     | 0.7568     | 0.9590     | 0.6448           | 0.7100 |
+| qwen3-1.7b-base (win)     | 0.6648               | 0.6295            | 0.6048     | 0.7568     | 0.9590     | 0.6448           | 0.7100 |
+| qwen3-1.7b-base (win+rosa)| 0.6558               | 0.6256            | 0.6033     | 0.7519     | 0.9540     | 0.6393           | 0.7050 |
 
 
-The experimental results show that with only a small amount of training, ROSA-Tuning enables a baseline global-attention model to switch to windowed attention while maintaining performance comparable to that of full global attention.
+
+| longbench                     | samsum | triviaqa | multi_news | trec | gov_report | niah-single-1-32k | avg   |
+|---------------------------|--------|----------|------------|------|------------|-------------------|-------|
+| qwen3-1.7b-base           | 42.04  | 86.20    | 23.23      | 72.67| 31.11      | 100.00            | 59.21 |
+| qwen3-1.7b-base (win)     | 32.51  | 61.56    | 10.43      | 52.67| 13.08      | 6.20              | 29.41 |
+| qwen3-1.7b-base (win+rosa)| 40.53  | 84.34    | 23.76      | 68.00| 26.19      | 100.00            | 57.14 |
+
+
+
 
 ## Experimental 1
 

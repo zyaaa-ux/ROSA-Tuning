@@ -17,7 +17,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 ### Setup
 
 - **Base model:** Qwen3-1.7B-Base with global attention or windowed attention(window size 2048) . 
-- **Training:** Approximately 30B tokens from prolong； 5B tokens drawn from various long-context reasoning datasets and do not overlap with the test data.  
+- **Training:** Approximately 30B tokens from prolong; 5B tokens drawn from various long-context reasoning datasets and do not overlap with the test data.  
 - **Evaluation:** lm-eval and longbench.
 
 ### Results

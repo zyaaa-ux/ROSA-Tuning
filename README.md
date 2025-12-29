@@ -12,7 +12,7 @@ The current implementation already supports multi-GPU, multi-node, and multi-cor
 
 ---
 
-## Experimental 2 (2025.11.26)
+## Experimental 2 (2025.12.29)
 
 ### Setup
 

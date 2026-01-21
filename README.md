@@ -1,4 +1,4 @@
-  # ROSA-Tuning: Tuning limited state to approach unlimited state
+  # ROSA-Tuning: Enhancing Long-Context Modeling via Suffix Matching
 
 ## What is ROSA-Tuning
 
@@ -9,6 +9,8 @@ ROSA-Tuning integrates this mechanism with modern large language models, enablin
 During inference, ROSA only needs to cache the rosa_token_id corresponding to the input sequence, instead of the costly kv_cache, achieving an O(1) spatiotemporal complexity per step.
 
 The current implementation already supports multi-GPU, multi-node, and multi-core training, and more efficient methods are under continuous development.
+
+The manuscript associated with this work has been completed and is under review by arXiv. (2026.1.14)
 
 ---
 

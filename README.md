@@ -10,7 +10,7 @@ During inference, ROSA only needs to cache the rosa_token_id corresponding to th
 
 The current implementation already supports multi-GPU, multi-node, and multi-core training, and more efficient methods are under continuous development.
 
-The manuscript associated with this work has been completed and is under review by arXiv. (2026.1.14)
+You can find the paper for this work at [placeholder URL]. Acknowledgments and other related content will be provided at a later date due to certain reasons.
 
 ---
 
